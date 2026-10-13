@@ -38162,48 +38162,304 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
 
 
 
+
 <script>
 /* ================================================================
-   JIZURA VI — CĂN DÒNG + CĂN TỪ (AUTO + THỦ CÔNG)
-   - Auto: ⚡ dòng | 🔤 từ
-   - Thủ công từ: panel chỉnh từng từ trong dòng (giống lineTimes)
-   Giữ nguyên cấu trúc dòng lời + timeline gốc.
+   JIZURA VI — WORD MARKERS TRÊN TIMELINE (kéo như điểm dòng)
+   - Marker dòng (gốc): tam giác trên, cyan/xám
+   - Marker TỪ: gạch xanh lá ở giữa timeline, kéo được
+   - Giữ nguyên chuyển cảnh theo dòng; thêm khớp từng từ với nhạc
    ================================================================ */
 (() => {
   if (typeof J === 'undefined') return;
-  console.log('[WORD-TIMING] Manual + Auto word timing installing...');
+  console.log('[WORD-TL] Timeline word markers installing...');
 
-  // ---------- shared helpers ----------
+  const TW = { drag: null, hover: null, enabled: true }; // {line, word} or null
+
   function splitWords(text) {
     const t = String(text || '').trim();
     if (!t) return [];
-    if (/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(t) && !/\s/.test(t)) {
+    if (/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(t) && !/\s/.test(t))
       return [...t].filter(c => c.trim());
-    }
     return t.split(/(\s+)/).filter(w => w.trim().length > 0);
   }
   function wordWeight(w) {
-    let score = 0;
+    let s = 0;
     for (const c of w) {
       const u = c.codePointAt(0);
-      if (u >= 0x3400 && u <= 0x9fff) score += 1.6;
-      else if (u >= 0xac00 && u <= 0xd7af) score += 1.4;
-      else if (u >= 0x3040 && u <= 0x30ff) score += 1.3;
-      else if (/[ăâêôơưđàáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵ]/i.test(c)) score += 1.15;
-      else score += 1;
+      if (u >= 0x3400 && u <= 0x9fff) s += 1.6;
+      else if (u >= 0xac00 && u <= 0xd7af) s += 1.4;
+      else if (u >= 0x3040 && u <= 0x30ff) s += 1.3;
+      else if (/[ăâêôơưđ]/i.test(c)) s += 1.15;
+      else s += 1;
     }
-    return Math.max(0.6, score);
+    return Math.max(0.6, s);
   }
+
+  function getWordTimes() {
+    const S = window.S;
+    if (!S || !S.project) return null;
+    if (!S.project.timing) S.project.timing = {};
+    return S.project.timing.wordTimes || null;
+  }
+
+  // Tạo wordTimes cho 1 dòng nếu chưa có (từ lineTimes)
+  function ensureLineWords(lineIdx) {
+    const S = window.S;
+    if (!S || !S.project || !S.plan) return null;
+    if (!S.project.timing) S.project.timing = {};
+    if (!S.project.timing.wordTimes) S.project.timing.wordTimes = {};
+    const ln = S.plan.lines[lineIdx];
+    if (!ln || ln.interlude) return null;
+    const text = (ln.text || '').trim();
+    if (!text) return null;
+    const words = splitWords(text);
+    if (!words.length) return null;
+
+    let arr = S.project.timing.wordTimes[lineIdx];
+    if (arr && arr.length === words.length) return arr;
+
+    const LT = S.project.timing.lineTimes || {};
+    const start = LT[lineIdx] != null ? +LT[lineIdx] : ln.start;
+    let end = LT[lineIdx + 1] != null ? +LT[lineIdx + 1]
+      : (lineIdx + 1 < S.plan.lines.length ? S.plan.lines[lineIdx + 1].start : S.plan.duration);
+    if (!(end > start)) end = start + Math.max(1.2, text.length * 0.12);
+    const span = end - start;
+    const weights = words.map(wordWeight);
+    const sumW = weights.reduce((a, b) => a + b, 0) || 1;
+    let t = start;
+    arr = [];
+    for (let i = 0; i < words.length; i++) {
+      const dur = span * (weights[i] / sumW);
+      arr.push({ word: words[i], start: +t.toFixed(3), end: +(t + dur).toFixed(3) });
+      t += dur;
+    }
+    if (arr.length) arr[arr.length - 1].end = +end.toFixed(3);
+    S.project.timing.wordTimes[lineIdx] = arr;
+    return arr;
+  }
+
+  function ensureAllWordMarkers() {
+    const S = window.S;
+    if (!S || !S.plan || !S.plan.lines) return;
+    for (let i = 0; i < S.plan.lines.length; i++) ensureLineWords(i);
+  }
+
+  // ----- Vẽ marker từ lên timeline (hook sau drawTimeline) -----
+  function drawWordMarkers() {
+    if (!TW.enabled) return;
+    const S = window.S;
+    if (!S || !S.plan || !S.project) return;
+    const c = document.getElementById('timeline');
+    if (!c) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = c.width, h = c.height;
+    if (!w || !h) return;
+    // lấy view giống gốc
+    let D, vd, off;
+    try {
+      if (typeof tlView === 'function') {
+        const v = tlView();
+        D = v.D; vd = v.vd; off = v.off;
+      } else return;
+    } catch (e) { return; }
+    const x = c.getContext('2d');
+    const X = t => (t - off) / vd * w;
+    const midY = h * 0.55;
+    const WT = S.project.timing && S.project.timing.wordTimes;
+    if (!WT) return;
+
+    for (const lineIdx of Object.keys(WT)) {
+      const arr = WT[lineIdx];
+      if (!arr || !arr.length) continue;
+      const li = +lineIdx;
+      for (let wi = 0; wi < arr.length; wi++) {
+        const item = arr[wi];
+        const lx = X(item.start);
+        if (lx < -30 || lx > w + 30) continue;
+        const isOn = TW.drag && TW.drag.line === li && TW.drag.word === wi;
+        const isHv = TW.hover && TW.hover.line === li && TW.hover.word === wi;
+        // thân marker
+        x.fillStyle = isOn ? '#fbbf24' : isHv ? '#4ade80' : '#22c55e';
+        x.fillRect(lx - (isOn || isHv ? 1.5*dpr : 0.8*dpr), midY - 10*dpr, isOn || isHv ? 3*dpr : 1.6*dpr, 20*dpr);
+        // kim cương nhỏ
+        x.beginPath();
+        x.moveTo(lx, midY - 6*dpr);
+        x.lineTo(lx + 4*dpr, midY);
+        x.lineTo(lx, midY + 6*dpr);
+        x.lineTo(lx - 4*dpr, midY);
+        x.closePath();
+        x.fill();
+        // chữ từ khi zoom to
+        if (typeof TL !== 'undefined' && TL.z > 2.5 && item.word) {
+          x.fillStyle = 'rgba(187,247,208,0.9)';
+          x.font = `${9 * dpr}px monospace`;
+          x.fillText(String(item.word).slice(0, 8), lx + 5*dpr, midY - 2*dpr);
+        }
+      }
+    }
+  }
+
+  // Hook drawTimeline
+  function hookDraw() {
+    if (typeof window.drawTimeline !== 'function') return false;
+    if (window.drawTimeline.__wordHooked) return true;
+    const orig = window.drawTimeline;
+    window.drawTimeline = function () {
+      const r = orig.apply(this, arguments);
+      try { drawWordMarkers(); } catch (e) { console.warn(e); }
+      return r;
+    };
+    window.drawTimeline.__wordHooked = true;
+    return true;
+  }
+
+  // Hit-test marker từ (ưu tiên vùng giữa timeline)
+  function wordHandleAt(ev) {
+    const S = window.S;
+    if (!S || !S.project || !S.project.timing || !S.project.timing.wordTimes) return null;
+    const c = document.getElementById('timeline');
+    if (!c) return null;
+    const r = c.getBoundingClientRect();
+    let vd, off;
+    try {
+      const v = tlView();
+      vd = v.vd; off = v.off;
+    } catch (e) { return null; }
+    const yRatio = (ev.clientY - r.top) / r.height;
+    // chỉ bắt ở nửa dưới–giữa (tránh đụng handle dòng ở top)
+    if (yRatio < 0.35 || yRatio > 0.85) return null;
+    let best = null, bd = 10;
+    const WT = S.project.timing.wordTimes;
+    for (const lineIdx of Object.keys(WT)) {
+      const arr = WT[lineIdx];
+      if (!arr) continue;
+      for (let wi = 0; wi < arr.length; wi++) {
+        const px = (arr[wi].start - off) / vd * r.width;
+        const d = Math.abs(px - (ev.clientX - r.left));
+        if (d < bd) { bd = d; best = { line: +lineIdx, word: wi }; }
+      }
+    }
+    return best;
+  }
+
+  function wordDragTo(ref, ev) {
+    const S = window.S;
+    if (!S || !ref) return;
+    const arr = S.project.timing.wordTimes[ref.line];
+    if (!arr || !arr[ref.word]) return;
+    let t;
+    try { t = tlTime(ev); } catch (e) { return; }
+    // snap beat (trừ khi giữ Shift)
+    if (!ev.shiftKey && S.plan && S.plan.beats && S.plan.beats.length) {
+      let bt = null, bd = 0.1;
+      for (const b of S.plan.beats) {
+        const d = Math.abs(b - t);
+        if (d < bd) { bd = d; bt = b; }
+        if (b > t + 0.15) break;
+      }
+      if (bt != null) t = bt;
+    }
+    const prevEnd = ref.word > 0 ? arr[ref.word - 1].start + 0.05 : -Infinity;
+    const nextStart = ref.word < arr.length - 1 ? arr[ref.word + 1].start - 0.05 : Infinity;
+    // giới hạn trong dòng
+    const ln = S.plan.lines[ref.line];
+    const LT = S.project.timing.lineTimes || {};
+    const lineStart = LT[ref.line] != null ? +LT[ref.line] : (ln ? ln.start : 0);
+    let lineEnd = LT[ref.line + 1] != null ? +LT[ref.line + 1]
+      : (ref.line + 1 < S.plan.lines.length ? S.plan.lines[ref.line + 1].start : S.plan.duration);
+    t = Math.max(lineStart, Math.min(lineEnd - 0.05, t));
+    t = Math.max(prevEnd, Math.min(nextStart, t));
+    t = +t.toFixed(3);
+
+    const oldStart = arr[ref.word].start;
+    const delta = t - oldStart;
+    arr[ref.word].start = t;
+    // kéo end theo nếu còn chỗ
+    if (arr[ref.word].end < t + 0.05) arr[ref.word].end = t + 0.08;
+    // từ đầu dòng → cập nhật lineTimes
+    if (ref.word === 0) {
+      if (!S.project.timing.lineTimes) S.project.timing.lineTimes = {};
+      S.project.timing.lineTimes[ref.line] = t;
+      // pin neighbours line
+      S.plan.lines.forEach(l => {
+        if (S.project.timing.lineTimes[l.index] == null)
+          S.project.timing.lineTimes[l.index] = +l.start.toFixed(3);
+      });
+    }
+    // cập nhật end của từ trước
+    if (ref.word > 0) arr[ref.word - 1].end = t;
+
+    if (typeof window.replan === 'function') {
+      // chỉ replan khi thả để mượt khi kéo
+      if (!TW._dragging) window.replan();
+    } else S.need = true;
+    if (typeof window.drawTimeline === 'function') window.drawTimeline();
+    if (typeof window.seek === 'function') window.seek(t + 0.001);
+  }
+
+  function hookPointer() {
+    const tl = document.getElementById('timeline');
+    if (!tl || tl.__wordPointerHooked) return !!tl;
+    tl.__wordPointerHooked = true;
+
+    tl.addEventListener('pointerdown', (e) => {
+      if (S.tap || S.exporting) return;
+      const wh = wordHandleAt(e);
+      if (wh) {
+        e.stopPropagation();
+        e.preventDefault();
+        if (typeof window.pushEdit === 'function') window.pushEdit();
+        TW.drag = wh;
+        TW._dragging = true;
+        if (typeof window.pause === 'function') window.pause();
+        tl.style.cursor = 'ew-resize';
+        tl.setPointerCapture && tl.setPointerCapture(e.pointerId);
+      }
+    }, true); // capture để ưu tiên hơn line handle khi ở vùng giữa
+
+    tl.addEventListener('pointermove', (e) => {
+      if (TW.drag) {
+        e.stopPropagation();
+        wordDragTo(TW.drag, e);
+        return;
+      }
+      const hv = wordHandleAt(e);
+      if (JSON.stringify(hv) !== JSON.stringify(TW.hover)) {
+        TW.hover = hv;
+        if (hv) tl.style.cursor = 'ew-resize';
+        if (typeof window.drawTimeline === 'function') window.drawTimeline();
+      }
+    }, true);
+
+    const endDrag = (e) => {
+      if (TW.drag) {
+        TW._dragging = false;
+        const d = TW.drag;
+        TW.drag = null;
+        // replan 1 lần khi thả
+        if (typeof window.replan === 'function') window.replan();
+        if (typeof window.flushSave === 'function') window.flushSave();
+        if (typeof window.renderLines === 'function') window.renderLines();
+        if (typeof window.drawTimeline === 'function') window.drawTimeline();
+        tl.style.cursor = 'pointer';
+      }
+    };
+    tl.addEventListener('pointerup', endDrag, true);
+    tl.addEventListener('pointercancel', endDrag, true);
+    return true;
+  }
+
+  // ----- Auto align (giữ) -----
   function findVocalRegions(audio, minDur = 0.3) {
     if (!audio || !audio.energy || !audio.energy.length) return null;
     const e = audio.energy, rate = audio.energyRate || 20;
     let sum = 0, sum2 = 0;
     for (let i = 0; i < e.length; i++) { sum += e[i]; sum2 += e[i]*e[i]; }
     const mean = sum / e.length;
-    const std = Math.sqrt(Math.max(0, sum2 / e.length - mean*mean));
+    const std = Math.sqrt(Math.max(0, sum2 / e.length - mean * mean));
     const th = mean + std * 0.32;
-    const regions = [];
-    let start = null;
+    const regions = []; let start = null;
     for (let i = 0; i < e.length; i++) {
       const on = e[i] >= th;
       if (on && start === null) start = i / rate;
@@ -38221,19 +38477,18 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
     for (const r of regions) {
       if (merged.length && r.start - merged[merged.length-1].end < 0.35)
         merged[merged.length-1].end = r.end;
-      else merged.push({...r});
+      else merged.push({ ...r });
     }
     return merged.length ? merged : null;
   }
   function distributeLines(lines, duration, regions, beats) {
     const n = lines.length, times = {};
-    if (n === 0) return times;
-    if (regions && regions.length >= 1) {
-      let ptr = 0;
-      const per = n / regions.length;
+    if (!n) return times;
+    if (regions && regions.length) {
+      let ptr = 0; const per = n / regions.length;
       for (let ri = 0; ri < regions.length; ri++) {
         const r = regions[ri];
-        const count = Math.max(1, Math.round(ri === regions.length-1 ? (n - ptr) : per));
+        const count = Math.max(1, Math.round(ri === regions.length-1 ? n-ptr : per));
         const slice = [];
         for (let k = 0; k < count && ptr < n; k++, ptr++) slice.push(ptr);
         if (!slice.length) continue;
@@ -38243,16 +38498,12 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
       }
       while (ptr < n) { times[ptr] = +(duration * 0.88).toFixed(3); ptr++; }
     } else {
-      const usable = Math.max(1, duration * 0.92);
-      const step = usable / Math.max(1, n);
+      const step = Math.max(1, duration * 0.92) / Math.max(1, n);
       for (let i = 0; i < n; i++) {
         let t = i * step + 0.12;
         if (beats && beats.length) {
           let best = t, bd = 0.22;
-          for (const b of beats) {
-            const d = Math.abs(b - t);
-            if (d < bd) { bd = d; best = b; }
-          }
+          for (const b of beats) { const d = Math.abs(b - t); if (d < bd) { bd = d; best = b; } }
           t = best;
         }
         times[i] = +Math.max(0, Math.min(duration - 0.05, t)).toFixed(3);
@@ -38262,422 +38513,125 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
     for (let i = 0; i < n; i++) {
       let t = times[i] != null ? times[i] : prev + 0.7;
       if (t <= prev) t = prev + 0.28;
-      times[i] = +t.toFixed(3);
-      prev = t;
+      times[i] = +t.toFixed(3); prev = t;
     }
     return times;
   }
 
-  // ===== AUTO LINE =====
   J.autoAlignLyrics = async function () {
     const S = window.S;
     if (!S || !S.project) throw new Error('Chưa có project');
-    if (!S.audio || !S.audio.buffer) throw new Error('Hãy upload file nhạc trước');
+    if (!S.audio || !S.audio.buffer) throw new Error('Upload nhạc trước');
     const parsed = J.parseLyrics(S.project.lyrics || '');
     const lines = parsed.lines || [];
-    if (!lines.length) throw new Error('Chưa có lời để căn');
+    if (!lines.length) throw new Error('Chưa có lời');
     const duration = S.audio.duration || S.audio.buffer.duration;
-    const regions = findVocalRegions(S.audio);
-    const beats = (S.plan && S.plan.beats) || S.audio.beats || [];
-    const times = distributeLines(lines, duration, regions, beats);
+    const times = distributeLines(lines, duration, findVocalRegions(S.audio), (S.plan && S.plan.beats) || S.audio.beats || []);
     if (!S.project.timing) S.project.timing = {};
     S.project.timing.lineTimes = times;
     if (typeof window.replan === 'function') window.replan();
     else S.need = true;
-    return { mode: 'line', count: Object.keys(times).length };
+    if (typeof window.drawTimeline === 'function') window.drawTimeline();
+    return { count: Object.keys(times).length };
   };
 
-  // ===== AUTO WORD =====
   J.autoAlignWords = async function () {
     const S = window.S;
     if (!S || !S.project) throw new Error('Chưa có project');
-    if (!S.audio || !S.audio.buffer) throw new Error('Hãy upload file nhạc trước');
-    const parsed = J.parseLyrics(S.project.lyrics || '');
-    const lines = parsed.lines || [];
-    if (!lines.length) throw new Error('Chưa có lời để căn');
+    if (!S.audio || !S.audio.buffer) throw new Error('Upload nhạc trước');
     if (!S.project.timing) S.project.timing = {};
     if (!S.project.timing.lineTimes || !Object.keys(S.project.timing.lineTimes).length)
       await J.autoAlignLyrics();
-    const lineTimes = S.project.timing.lineTimes || {};
-    const duration = S.audio.duration || S.audio.buffer.duration;
-    const wordTimes = {};
-    let totalWords = 0;
-    for (let i = 0; i < lines.length; i++) {
-      const ln = lines[i];
-      const text = (ln.text || ln.raw || '').trim();
-      if (!text || ln.interlude) { wordTimes[i] = []; continue; }
-      const words = splitWords(text);
-      if (!words.length) { wordTimes[i] = []; continue; }
-      const start = lineTimes[i] != null ? +lineTimes[i] : (ln.start || 0);
-      let end = lineTimes[i+1] != null ? +lineTimes[i+1] : (i === lines.length-1 ? duration : start + Math.max(1.2, text.length*0.12));
-      const span = Math.max(0.4, end - start);
-      const weights = words.map(wordWeight);
-      const sumW = weights.reduce((a,b)=>a+b,0) || 1;
-      let t = start;
-      const arr = [];
-      for (let w = 0; w < words.length; w++) {
-        const dur = span * (weights[w]/sumW);
-        arr.push({ word: words[w], start: +t.toFixed(3), end: +(t+dur).toFixed(3) });
-        t += dur; totalWords++;
-      }
-      if (arr.length) arr[arr.length-1].end = +end.toFixed(3);
-      wordTimes[i] = arr;
-      if (!S.project.overrides) S.project.overrides = {};
-      if (!S.project.overrides[i]) S.project.overrides[i] = {};
-      S.project.overrides[i].cuts = Math.min(6, Math.max(1, Math.ceil(words.length/2)));
-    }
-    S.project.timing.wordTimes = wordTimes;
-    for (let i = 0; i < lines.length; i++) {
-      if (wordTimes[i] && wordTimes[i].length) lineTimes[i] = wordTimes[i][0].start;
-    }
-    S.project.timing.lineTimes = lineTimes;
     if (typeof window.replan === 'function') window.replan();
-    else S.need = true;
-    return { mode: 'word', words: totalWords };
+    ensureAllWordMarkers();
+    // refine words from lineTimes
+    if (S.plan && S.plan.lines) {
+      for (let i = 0; i < S.plan.lines.length; i++) {
+        delete S.project.timing.wordTimes[i];
+        ensureLineWords(i);
+      }
+    }
+    if (typeof window.replan === 'function') window.replan();
+    if (typeof window.drawTimeline === 'function') window.drawTimeline();
+    let words = 0;
+    const WT = S.project.timing.wordTimes || {};
+    for (const k of Object.keys(WT)) words += (WT[k] || []).length;
+    return { words };
   };
 
-  // ===== MANUAL WORD EDITOR =====
-  let currentLineIdx = -1;
-
-  function ensureWordTimesForLine(lineIdx) {
-    const S = window.S;
-    if (!S || !S.project) return [];
-    if (!S.project.timing) S.project.timing = {};
-    if (!S.project.timing.wordTimes) S.project.timing.wordTimes = {};
-    const parsed = J.parseLyrics(S.project.lyrics || '');
-    const ln = (parsed.lines || [])[lineIdx];
-    if (!ln) return [];
-    const text = (ln.text || ln.raw || '').trim();
-    if (!text || ln.interlude) return [];
-
-    let arr = S.project.timing.wordTimes[lineIdx];
-    const words = splitWords(text);
-    // nếu chưa có hoặc số từ lệch → tạo mới từ lineTimes
-    if (!arr || arr.length !== words.length) {
-      const lineTimes = S.project.timing.lineTimes || {};
-      const duration = (S.audio && (S.audio.duration || S.audio.buffer.duration)) || (S.plan && S.plan.duration) || 60;
-      const start = lineTimes[lineIdx] != null ? +lineTimes[lineIdx] : (ln.start || 0);
-      let end = lineTimes[lineIdx+1] != null ? +lineTimes[lineIdx+1] : start + Math.max(1.5, text.length*0.15);
-      if (end <= start) end = start + 1.5;
-      const span = end - start;
-      const weights = words.map(wordWeight);
-      const sumW = weights.reduce((a,b)=>a+b,0) || 1;
-      let t = start;
-      arr = [];
-      for (let w = 0; w < words.length; w++) {
-        const dur = span * (weights[w]/sumW);
-        arr.push({ word: words[w], start: +t.toFixed(3), end: +(t+dur).toFixed(3) });
-        t += dur;
-      }
-      if (arr.length) arr[arr.length-1].end = +end.toFixed(3);
-      S.project.timing.wordTimes[lineIdx] = arr;
-    }
-    return S.project.timing.wordTimes[lineIdx];
-  }
-
-  function openWordEditor(lineIdx) {
-    const S = window.S;
-    if (!S || !S.project) return;
-    currentLineIdx = lineIdx;
-    const arr = ensureWordTimesForLine(lineIdx);
-    const panel = document.getElementById('jzWordEditor');
-    if (!panel) return;
-    panel.style.display = 'block';
-    const title = panel.querySelector('.jz-we-title');
-    const list = panel.querySelector('.jz-we-list');
-    const parsed = J.parseLyrics(S.project.lyrics || '');
-    const ln = (parsed.lines || [])[lineIdx];
-    title.textContent = 'Căn từ thủ công — Dòng ' + (lineIdx+1) + (ln && ln.text ? ': ' + ln.text.slice(0,40) : '');
-
-    list.innerHTML = '';
-    if (!arr.length) {
-      list.innerHTML = '<div style="opacity:.7;padding:8px">Dòng này không có từ (hoặc là interlude).</div>';
-      return;
-    }
-
-    const lineTimes = S.project.timing.lineTimes || {};
-    const duration = (S.audio && (S.audio.duration || S.audio.buffer.duration)) || 999;
-    const lineStart = lineTimes[lineIdx] != null ? +lineTimes[lineIdx] : (ln && ln.start) || 0;
-    let lineEnd = lineTimes[lineIdx+1] != null ? +lineTimes[lineIdx+1] : lineStart + 3;
-    if (lineEnd <= lineStart) lineEnd = lineStart + 3;
-
-    arr.forEach((item, wi) => {
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.06)';
-      const lab = document.createElement('span');
-      lab.style.cssText = 'min-width:90px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600';
-      lab.textContent = item.word;
-      lab.title = item.word;
-
-      const inpS = document.createElement('input');
-      inpS.type = 'number'; inpS.step = '0.01'; inpS.min = '0';
-      inpS.value = item.start.toFixed(2);
-      inpS.style.cssText = 'width:72px;padding:3px 6px;border-radius:4px;border:1px solid #444;background:#1a1a1f;color:#eee';
-      inpS.title = 'Thời điểm BẮT ĐẦU từ (giây)';
-
-      const inpE = document.createElement('input');
-      inpE.type = 'number'; inpE.step = '0.01'; inpE.min = '0';
-      inpE.value = item.end.toFixed(2);
-      inpE.style.cssText = 'width:72px;padding:3px 6px;border-radius:4px;border:1px solid #444;background:#1a1a1f;color:#eee';
-      inpE.title = 'Thời điểm KẾT THÚC từ (giây)';
-
-      const apply = () => {
-        let s = parseFloat(inpS.value), e = parseFloat(inpE.value);
-        if (!isFinite(s)) s = item.start;
-        if (!isFinite(e)) e = item.end;
-        // clamp trong khoảng dòng + monotonic với từ trước/sau
-        const prevEnd = wi > 0 ? arr[wi-1].end : lineStart;
-        const nextStart = wi < arr.length-1 ? arr[wi+1].start : lineEnd;
-        s = Math.max(prevEnd, Math.min(s, e - 0.05));
-        e = Math.min(nextStart, Math.max(e, s + 0.05));
-        item.start = +s.toFixed(3);
-        item.end = +e.toFixed(3);
-        inpS.value = item.start.toFixed(2);
-        inpE.value = item.end.toFixed(2);
-        // sync first word → lineTimes
-        if (wi === 0) {
-          if (!S.project.timing.lineTimes) S.project.timing.lineTimes = {};
-          S.project.timing.lineTimes[lineIdx] = item.start;
-        }
-        if (typeof window.replan === 'function') window.replan();
-        else S.need = true;
-        if (typeof window.seek === 'function') window.seek(item.start + 0.001);
-        else if (S) { S.t = item.start; S.need = true; }
-      };
-      inpS.addEventListener('change', apply);
-      inpE.addEventListener('change', apply);
-
-      const btnPlay = document.createElement('button');
-      btnPlay.type = 'button';
-      btnPlay.textContent = '▶';
-      btnPlay.title = 'Nghe từ vị trí từ này';
-      btnPlay.style.cssText = 'padding:2px 8px;cursor:pointer;border-radius:4px;border:1px solid #555;background:#222;color:#eee';
-      btnPlay.onclick = () => {
-        if (typeof window.seek === 'function') window.seek(item.start);
-        else if (S) { S.t = item.start; S.need = true; }
-        if (S && !S.playing && typeof window.play === 'function') window.play();
-      };
-
-      row.appendChild(lab);
-      row.appendChild(document.createTextNode('start'));
-      row.appendChild(inpS);
-      row.appendChild(document.createTextNode('end'));
-      row.appendChild(inpE);
-      row.appendChild(btnPlay);
-      list.appendChild(row);
-    });
-  }
-
-  function buildWordEditorPanel() {
-    if (document.getElementById('jzWordEditor')) return;
-    const panel = document.createElement('div');
-    panel.id = 'jzWordEditor';
-    panel.style.cssText = 'display:none;position:fixed;bottom:70px;right:16px;width:min(420px,92vw);max-height:55vh;overflow:auto;z-index:99998;background:#16161c;border:1px solid #333;border-radius:12px;padding:12px 14px;box-shadow:0 12px 40px rgba(0,0,0,.55);color:#eee;font-size:13px';
-    panel.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <strong class="jz-we-title" style="font-size:14px">Căn từ thủ công</strong>
-        <button type="button" id="jzWeClose" style="padding:2px 10px;cursor:pointer;border-radius:4px;border:1px solid #555;background:#222;color:#eee">Đóng</button>
-      </div>
-      <div style="opacity:.75;font-size:12px;margin-bottom:8px">Chỉnh start/end từng từ trong dòng. Dòng lời vẫn giữ nguyên. Timeline gốc vẫn dùng cho dòng.</div>
-      <div class="jz-we-list"></div>
-      <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
-        <button type="button" id="jzWeEven" style="padding:4px 10px;cursor:pointer;border-radius:4px;border:1px solid #555;background:#222;color:#eee">Chia đều trong dòng</button>
-        <button type="button" id="jzWeFromLine" style="padding:4px 10px;cursor:pointer;border-radius:4px;border:1px solid #555;background:#222;color:#eee">Lấy lại từ dòng</button>
-      </div>
-    `;
-    document.body.appendChild(panel);
-    panel.querySelector('#jzWeClose').onclick = () => { panel.style.display = 'none'; currentLineIdx = -1; };
-    panel.querySelector('#jzWeEven').onclick = () => {
-      if (currentLineIdx < 0) return;
-      const S = window.S;
-      const arr = S.project.timing.wordTimes[currentLineIdx];
-      if (!arr || !arr.length) return;
-      const start = arr[0].start;
-      const end = arr[arr.length-1].end;
-      const span = Math.max(0.3, end - start);
-      const weights = arr.map(x => wordWeight(x.word));
-      const sumW = weights.reduce((a,b)=>a+b,0) || 1;
-      let t = start;
-      for (let i = 0; i < arr.length; i++) {
-        const dur = span * (weights[i]/sumW);
-        arr[i].start = +t.toFixed(3);
-        arr[i].end = +(t+dur).toFixed(3);
-        t += dur;
-      }
-      arr[arr.length-1].end = +end.toFixed(3);
-      openWordEditor(currentLineIdx);
-      if (typeof window.replan === 'function') window.replan();
-    };
-    panel.querySelector('#jzWeFromLine').onclick = () => {
-      if (currentLineIdx < 0) return;
-      const S = window.S;
-      if (S.project.timing && S.project.timing.wordTimes)
-        delete S.project.timing.wordTimes[currentLineIdx];
-      openWordEditor(currentLineIdx);
-    };
-  }
-
-  // Thêm nút "Căn từ" vào mỗi dòng + luôn có nút nổi
-  function injectLineWordButtons() {
-    const S = window.S;
-    // 1) Nút trên từng dòng nếu list đã có
-    const tryInject = (lis) => {
-      if (!lis || !lis.length) return 0;
-      let n = 0;
-      lis.forEach((li, i) => {
-        if (!li || li.querySelector('.jz-word-btn')) return;
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'jz-word-btn';
-        btn.textContent = '🔤';
-        btn.title = 'Căn từ thủ công — dòng ' + (i+1);
-        btn.style.cssText = 'margin-left:4px;padding:2px 7px;cursor:pointer;font-size:12px;border-radius:4px;border:1px solid #4ade80;background:#14532d;color:#bbf7d0;';
-        btn.onclick = (e) => {
-          e.preventDefault(); e.stopPropagation();
-          buildWordEditorPanel();
-          openWordEditor(i);
-        };
-        const meta = li.querySelector('.meta') || li.querySelector('.txt') || li;
-        meta.appendChild(btn);
-        n++;
-      });
-      return n;
-    };
-    if (S && S.lineEls) tryInject(S.lineEls);
-    // fallback: quét DOM list lời
-    const items = document.querySelectorAll('.col-left li, .line-list li, [class*="line"] li, .lyrics-list li');
-    if (items.length) tryInject(Array.from(items));
-  }
-
-  // Nút nổi LUÔN hiện: mở panel chọn dòng để căn từ thủ công
-  function ensureFloatingManualBtn() {
-    if (document.getElementById('jzManualWordFab')) return;
-    const fab = document.createElement('button');
-    fab.id = 'jzManualWordFab';
-    fab.type = 'button';
-    fab.innerHTML = '🔤 Căn từ thủ công';
-    fab.title = 'Mở panel chỉnh thời gian từng từ trong một dòng';
-    fab.style.cssText = 'position:fixed;bottom:90px;right:16px;z-index:99999;padding:10px 14px;border-radius:10px;border:none;cursor:pointer;font-size:14px;font-weight:700;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.4)';
-    fab.onclick = () => {
-      buildWordEditorPanel();
-      const panel = document.getElementById('jzWordEditor');
-      if (!panel) return;
-      // hiện picker chọn dòng nếu chưa chọn
-      const S = window.S;
-      let maxLine = 0;
-      if (S && S.plan && S.plan.lines) maxLine = S.plan.lines.length;
-      else if (S && S.project && S.project.lyrics) maxLine = S.project.lyrics.split(/\n/).filter(x=>x.trim()).length;
-      if (maxLine < 1) maxLine = 20;
-      const pick = prompt('Nhập số dòng cần căn từ thủ công (1–' + maxLine + '):', String((currentLineIdx>=0?currentLineIdx:0)+1));
-      if (pick == null) return;
-      const idx = Math.max(0, Math.min(maxLine-1, (parseInt(pick,10)||1) - 1));
-      openWordEditor(idx);
-      panel.style.display = 'block';
-    };
-    document.body.appendChild(fab);
-  }
-
-  // Hook replan / render list
-  const _origReplan = window.replan;
-  if (typeof _origReplan === 'function') {
-    window.replan = function() {
-      const r = _origReplan.apply(this, arguments);
-      setTimeout(injectLineWordButtons, 50);
-      return r;
-    };
-  }
-  // cũng observe list
-  const obs = new MutationObserver(() => setTimeout(injectLineWordButtons, 80));
-  setTimeout(() => {
-    const col = document.querySelector('.col-left') || document.body;
-    obs.observe(col, { childList: true, subtree: true });
-    injectLineWordButtons();
-  }, 1500);
-
-  // ---------- Auto buttons bar ----------
-  function addButtons() {
+  // ----- UI buttons -----
+  function addBar() {
     if (document.getElementById('jzAlignBar')) return;
     const wrap = document.createElement('div');
     wrap.id = 'jzAlignBar';
-    wrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0';
+    wrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0;padding:6px;background:rgba(0,0,0,.35);border-radius:8px';
+    const styleBtn = (bg) => 'padding:7px 12px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:700;border:none;color:#fff;background:' + bg;
 
-    const mk = (id, html, grad, title) => {
-      const b = document.createElement('button');
-      b.id = id; b.type = 'button';
-      b.style.cssText = 'padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;background:'+grad+';color:#fff;border:none;font-weight:600';
-      b.innerHTML = html; b.title = title;
-      return b;
+    const b1 = document.createElement('button');
+    b1.type = 'button'; b1.style.cssText = styleBtn('linear-gradient(135deg,#0ea5e9,#6366f1)');
+    b1.textContent = '⚡ Tự căn dòng';
+    b1.title = 'Căn marker dòng theo nhạc';
+    b1.onclick = async () => {
+      b1.disabled = true; b1.textContent = '⏳...';
+      try { const r = await J.autoAlignLyrics(); b1.textContent = '✅ ' + r.count + ' dòng'; }
+      catch (e) { b1.textContent = '❌ ' + (e.message || e); }
+      setTimeout(() => { b1.textContent = '⚡ Tự căn dòng'; b1.disabled = false; }, 2000);
     };
-    const btnLine = mk('jzAutoAlignBtn', '⚡ Tự căn dòng', 'linear-gradient(135deg,#0ea5e9,#6366f1)', 'Auto căn từng DÒNG');
-    const btnWord = mk('jzAutoWordBtn', '🔤 Tự căn theo từ', 'linear-gradient(135deg,#10b981,#059669)', 'Auto căn từng TỪ');
-    const btnClear = document.createElement('button');
-    btnClear.type = 'button';
-    btnClear.style.cssText = 'padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px';
-    btnClear.textContent = '↺ Xóa căn tự động';
-    btnClear.title = 'Xóa lineTimes + wordTimes';
 
-    btnLine.onclick = async () => {
-      btnLine.disabled = true; btnWord.disabled = true;
-      const old = btnLine.innerHTML;
-      btnLine.innerHTML = '⏳ ...';
-      try {
-        const r = await J.autoAlignLyrics();
-        btnLine.innerHTML = '✅ ' + r.count + ' dòng';
-        setTimeout(() => { btnLine.innerHTML = old; btnLine.disabled = false; btnWord.disabled = false; }, 2000);
-      } catch (e) {
-        btnLine.innerHTML = '❌ ' + (e.message||e);
-        setTimeout(() => { btnLine.innerHTML = old; btnLine.disabled = false; btnWord.disabled = false; }, 2800);
-      }
-    };
-    btnWord.onclick = async () => {
-      btnLine.disabled = true; btnWord.disabled = true;
-      const old = btnWord.innerHTML;
-      btnWord.innerHTML = '⏳ ...';
+    const b2 = document.createElement('button');
+    b2.type = 'button'; b2.style.cssText = styleBtn('linear-gradient(135deg,#22c55e,#16a34a)');
+    b2.textContent = '🔤 Hiện + căn marker TỪ';
+    b2.title = 'Tạo marker từng từ trên timeline — kéo xanh lá để khớp nhạc';
+    b2.onclick = async () => {
+      b2.disabled = true; b2.textContent = '⏳...';
       try {
         const r = await J.autoAlignWords();
-        btnWord.innerHTML = '✅ ' + r.words + ' từ';
-        setTimeout(() => { btnWord.innerHTML = old; btnLine.disabled = false; btnWord.disabled = false; }, 2000);
-      } catch (e) {
-        btnWord.innerHTML = '❌ ' + (e.message||e);
-        setTimeout(() => { btnWord.innerHTML = old; btnLine.disabled = false; btnWord.disabled = false; }, 2800);
-      }
-    };
-    btnClear.onclick = () => {
-      if (!window.S || !S.project) return;
-      if (S.project.timing) { S.project.timing.lineTimes = {}; S.project.timing.wordTimes = {}; }
-      if (typeof window.replan === 'function') window.replan();
-      btnClear.textContent = 'Đã xóa';
-      setTimeout(() => btnClear.textContent = '↺ Xóa căn tự động', 1400);
+        TW.enabled = true;
+        if (typeof window.drawTimeline === 'function') window.drawTimeline();
+        b2.textContent = '✅ ' + r.words + ' từ (kéo trên timeline)';
+      } catch (e) { b2.textContent = '❌ ' + (e.message || e); }
+      setTimeout(() => { b2.textContent = '🔤 Hiện + căn marker TỪ'; b2.disabled = false; }, 2500);
     };
 
-    wrap.appendChild(btnLine);
-    wrap.appendChild(btnWord);
-    wrap.appendChild(btnClear);
+    const b3 = document.createElement('button');
+    b3.type = 'button'; b3.style.cssText = 'padding:6px 10px;border-radius:6px;cursor:pointer;font-size:12px;border:1px solid #555;background:#222;color:#eee';
+    b3.textContent = '↺ Xóa marker từ';
+    b3.onclick = () => {
+      const S = window.S;
+      if (S && S.project && S.project.timing) S.project.timing.wordTimes = {};
+      if (typeof window.drawTimeline === 'function') window.drawTimeline();
+      b3.textContent = 'Đã xóa';
+      setTimeout(() => { b3.textContent = '↺ Xóa marker từ'; }, 1200);
+    };
 
-    let placed = false;
-    const candidates = [document.getElementById('tapPanel'), document.querySelector('[id*="tap"]'), document.querySelector('.tap')];
-    for (const c of candidates) {
-      if (c) { c.parentNode.insertBefore(wrap, c.nextSibling); placed = true; break; }
-    }
-    if (!placed) {
-      wrap.style.cssText += ';position:fixed;bottom:16px;right:16px;z-index:99999;background:rgba(0,0,0,.75);padding:8px;border-radius:10px';
+    const tip = document.createElement('span');
+    tip.style.cssText = 'font-size:11px;opacity:.8;max-width:280px';
+    tip.textContent = 'Marker XANH LÁ = từng từ. Kéo trên timeline (vùng giữa) để khớp nhạc. Marker dòng (tam giác trên) vẫn như cũ.';
+
+    wrap.appendChild(b1); wrap.appendChild(b2); wrap.appendChild(b3); wrap.appendChild(tip);
+
+    const anchor = document.getElementById('tapPanel') || document.getElementById('timeline');
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(wrap, anchor);
+    else {
+      wrap.style.position = 'fixed'; wrap.style.bottom = '12px'; wrap.style.left = '12px'; wrap.style.zIndex = '99999';
       document.body.appendChild(wrap);
     }
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { setTimeout(addButtons, 500); setTimeout(buildWordEditorPanel, 600); setTimeout(ensureFloatingManualBtn, 700); });
-  } else {
-    setTimeout(addButtons, 500);
-    setTimeout(buildWordEditorPanel, 600); setTimeout(ensureFloatingManualBtn, 700);
+  function boot() {
+    hookDraw();
+    hookPointer();
+    addBar();
+    // re-hook vài lần vì UI load muộn
+    setTimeout(() => { hookDraw(); hookPointer(); addBar(); }, 800);
+    setTimeout(() => { hookDraw(); hookPointer(); }, 2000);
+    setTimeout(() => { hookDraw(); hookPointer(); }, 4000);
   }
-  setTimeout(addButtons, 2000);
-  setTimeout(injectLineWordButtons, 2500);
-  setTimeout(ensureFloatingManualBtn, 800);
-  setTimeout(ensureFloatingManualBtn, 2000);
-  setTimeout(ensureFloatingManualBtn, 4000);
 
-  console.log('[WORD-TIMING] Ready: auto line/word + manual word editor per line (🔤 on each line)');
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+
+  console.log('[WORD-TL] Ready: green word markers on timeline, drag like line cuts');
 })();
 </script>
 

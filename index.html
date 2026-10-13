@@ -38010,7 +38010,7 @@ function boot() {
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 J.ui = S;
 // hooks for hosts that embed the app (the After Effects CEP panel)
-J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restartPreview, exportRange, exportRangeLines, setOv, drawTimeline, renderLines, tlView, tlTime, pushEdit, tlHandleAt, tlDragTo };
+J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, restartPreview, exportRange, exportRangeLines, setOv, drawTimeline, renderLines, tlView, tlTime, pushEdit, tlHandleAt, tlDragTo };
 })();
 
 </script>
@@ -38018,273 +38018,300 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
 
 
 
+
 <script>
 /* ================================================================
-   CUT boundary drag — dùng J.ui / J.uiApi (scope gốc)
-   Bật/Tắt được. Kéo vạch vàng = cutTime.
+   CHẠM TỪNG TỪ = đặt điểm chuyển cảnh theo âm thanh
+   Giống tap dòng gốc, nhưng từng TỪ trong dòng.
+   1) Tách dòng thành N cut = số từ
+   2) Phát nhạc → mỗi lần CHẠM = từ đó bắt đầu (ghi cutTime)
    ================================================================ */
 (() => {
-  const api = () => (typeof J !== 'undefined' && J.uiApi) ? J.uiApi : null;
-  const state = () => (typeof J !== 'undefined' && J.ui) ? J.ui : null;
+  const api = () => (J && J.uiApi) ? J.uiApi : null;
+  const st = () => (J && J.ui) ? J.ui : null;
 
-  const CD = { on: true, drag: null, hover: null };
+  const WT = {
+    active: false,
+    line: -1,
+    word: 0,      // index từ đang chờ chạm (0 = đầu dòng)
+    words: [],    // string[]
+    done: [],     // undo stack
+  };
 
-  function lyricCuts(lineIdx) {
-    const S = state();
-    if (!S || !S.plan) return [];
-    return S.plan.cuts.filter(c => c.line === lineIdx && J.LAYOUTS[c.layout] && !J.LAYOUTS[c.layout].special);
+  function splitWords(text) {
+    const t = String(text || '').trim();
+    if (!t) return [];
+    // có khoảng trắng → tách theo space
+    if (/\s/.test(t)) return t.split(/\s+/).filter(Boolean);
+    // CJK / không space → tách từng ký tự hoặc cụm 2
+    const chars = [...t];
+    if (chars.length <= 8) return chars;
+    const out = [];
+    for (let i = 0; i < chars.length; i += 2) out.push(chars.slice(i, i + 2).join(''));
+    return out;
   }
 
-  function cutEdgeAt(ev) {
-    if (!CD.on) return null;
-    const S = state();
+  function ensureWordCuts(lineIdx) {
+    const S = st();
     const A = api();
-    if (!S || !S.plan || !A || !A.tlView) return null;
-    const c = document.getElementById('timeline');
-    if (!c) return null;
-    const r = c.getBoundingClientRect();
-    const yRatio = (ev.clientY - r.top) / r.height;
-    if (yRatio < 0.28) return null;
-    let vd, off;
-    try { const v = A.tlView(); vd = v.vd; off = v.off; } catch (e) { return null; }
-    let best = null, bd = 10;
-    const seen = new Set();
-    for (const cut of S.plan.cuts) {
-      if (cut.line < 0 || seen.has(cut.line)) continue;
-      const cuts = lyricCuts(cut.line);
-      if (cuts.length < 2) continue;
-      seen.add(cut.line);
-      for (let k = 1; k < cuts.length; k++) {
-        const px = (cuts[k].start - off) / vd * r.width;
-        const d = Math.abs(px - (ev.clientX - r.left));
-        if (d < bd) { bd = d; best = { line: cut.line, k }; }
-      }
-    }
-    return best;
-  }
-
-  function drawEdges() {
-    if (!CD.on) return;
-    const S = state();
-    const A = api();
-    if (!S || !S.plan || !A || !A.tlView) return;
-    const c = document.getElementById('timeline');
-    if (!c || !c.width) return;
-    let vd, off;
-    try { const v = A.tlView(); vd = v.vd; off = v.off; } catch (e) { return; }
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const w = c.width, h = c.height;
-    const x = c.getContext('2d');
-    const X = t => (t - off) / vd * w;
-    const top = h * 0.3, bot = h - 8 * dpr;
-    const seen = new Set();
-    for (const cut of S.plan.cuts) {
-      if (cut.line < 0 || seen.has(cut.line)) continue;
-      const cuts = lyricCuts(cut.line);
-      if (cuts.length < 2) continue;
-      seen.add(cut.line);
-      for (let k = 1; k < cuts.length; k++) {
-        const lx = X(cuts[k].start);
-        if (lx < -20 || lx > w + 20) continue;
-        const isOn = CD.drag && CD.drag.line === cut.line && CD.drag.k === k;
-        const isHv = CD.hover && CD.hover.line === cut.line && CD.hover.k === k;
-        x.fillStyle = isOn ? '#fbbf24' : isHv ? '#f59e0b' : 'rgba(251,191,36,0.9)';
-        x.fillRect(lx - (isOn || isHv ? 2*dpr : 1.2*dpr), top, isOn || isHv ? 4*dpr : 2.4*dpr, bot - top);
-        x.fillStyle = isOn ? '#fef3c7' : '#fbbf24';
-        x.fillRect(lx - 5*dpr, (top+bot)/2 - 5*dpr, 10*dpr, 10*dpr);
-      }
-    }
-  }
-
-  function setCutTime(line, k, absT) {
-    const S = state();
-    const A = api();
-    if (!S || !S.plan || !A) return;
-    const ln = S.plan.lines[line];
-    if (!ln) return;
-    const cuts = lyricCuts(line);
-    if (k < 1 || k >= cuts.length) return;
-    let rel = absT - ln.start;
-    const minRel = 0.22 * k;
-    const maxRel = (ln.end - ln.start) - 0.22 * (cuts.length - k);
-    const prevAbs = cuts[k - 1].start;
-    const nextAbs = k + 1 < cuts.length ? cuts[k + 1].start : ln.end;
-    rel = Math.max(prevAbs - ln.start + 0.2, Math.min(nextAbs - ln.start - 0.2, rel));
-    rel = +rel.toFixed(3);
-    if (A.pushEdit) A.pushEdit();
-    if (A.setOv) {
-      const cur = (S.project.overrides && S.project.overrides[line]) || {};
-      const ct = Object.assign({}, cur.cutTime || {});
-      ct[k] = rel;
-      A.setOv(line, { cutTime: ct });
-    }
-  }
-
-  function hookDraw() {
-    const A = api();
-    if (!A || !A.drawTimeline || A.drawTimeline.__cd) return false;
-    const orig = A.drawTimeline;
-    A.drawTimeline = function () {
-      const r = orig.apply(this, arguments);
-      try { drawEdges(); } catch (e) {}
-      return r;
-    };
-    A.drawTimeline.__cd = true;
-    // also put on window for any other callers
-    window.drawTimeline = A.drawTimeline;
-    return true;
-  }
-
-  function hookPointer() {
-    const tl = document.getElementById('timeline');
-    if (!tl || tl.__cdHook) return !!tl;
-    tl.__cdHook = true;
-    const A = api;
-
-    tl.addEventListener('pointerdown', (e) => {
-      if (!CD.on) return;
-      const S = state();
-      if (!S || S.tap || S.exporting) return;
-      const edge = cutEdgeAt(e);
-      if (!edge) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const AP = api();
-      if (AP && AP.pushEdit) AP.pushEdit();
-      if (AP && AP.pause) AP.pause();
-      CD.drag = edge;
-      tl.style.cursor = 'ew-resize';
-      try { tl.setPointerCapture(e.pointerId); } catch (err) {}
-    }, true);
-
-    tl.addEventListener('pointermove', (e) => {
-      if (!CD.on) return;
-      const AP = api();
-      if (CD.drag) {
-        e.preventDefault();
-        e.stopPropagation();
-        let t;
-        try { t = AP.tlTime(e); } catch (err) { return; }
-        const S = state();
-        if (!e.shiftKey && S && S.plan && S.plan.beats) {
-          let bt = null, bd = 0.1;
-          for (const b of S.plan.beats) {
-            const d = Math.abs(b - t);
-            if (d < bd) { bd = d; bt = b; }
-            if (b > t + 0.15) break;
-          }
-          if (bt != null) t = bt;
-        }
-        setCutTime(CD.drag.line, CD.drag.k, t);
-        if (AP.replan) AP.replan();
-        if (AP.drawTimeline) AP.drawTimeline();
-        if (AP.seek) AP.seek(t + 0.001);
-        return;
-      }
-      const hv = cutEdgeAt(e);
-      const same = hv && CD.hover && hv.line === CD.hover.line && hv.k === CD.hover.k;
-      if (!same) {
-        CD.hover = hv;
-        if (hv) tl.style.cursor = 'ew-resize';
-        else if (!CD.drag) tl.style.cursor = '';
-        if (AP && AP.drawTimeline) AP.drawTimeline();
-      }
-    }, true);
-
-    const end = () => {
-      if (!CD.drag) return;
-      CD.drag = null;
-      const AP = api();
-      if (AP) {
-        if (AP.replan) AP.replan();
-        if (AP.flushSave) AP.flushSave();
-        if (AP.renderLines) AP.renderLines();
-        if (AP.drawTimeline) AP.drawTimeline();
-      }
-    };
-    tl.addEventListener('pointerup', end, true);
-    tl.addEventListener('pointercancel', end, true);
-    return true;
-  }
-
-  function status(msg) {
-    const el = document.getElementById('jzCdStatus');
-    if (el) el.textContent = msg;
-  }
-
-  function splitLineToCuts() {
-    const S = state();
-    const A = api();
-    if (!S) { status('App chưa sẵn sàng'); return; }
-    if (!S.plan || !S.plan.lines || !S.plan.lines.length) {
-      status('Chưa có timeline — dán lời + upload nhạc trước');
-      return;
-    }
-    let li = -1;
-    for (const ln of S.plan.lines) {
-      if (S.t >= ln.start && S.t < (ln.end || ln.start + 1)) { li = ln.index; break; }
-    }
-    if (li < 0 && S.curLine >= 0) li = S.curLine;
-    if (li < 0) li = 0;
-    const ln = S.plan.lines[li];
-    if (!ln || ln.interlude) { status('Dòng không hợp lệ / interlude'); return; }
-    const text = (ln.text || '').trim();
-    let n = text.split(/\s+/).filter(Boolean).length;
-    if (n <= 1 && text.length > 2) n = Math.min(6, Math.max(2, Math.ceil([...text].length / 3)));
-    n = Math.max(2, Math.min(8, n || 2));
-    if (A && A.setOv) A.setOv(li, { cuts: n });
+    if (!S || !S.plan) return null;
+    const ln = S.plan.lines[lineIdx];
+    if (!ln || ln.interlude) return null;
+    const words = splitWords(ln.text || '');
+    if (words.length < 1) return null;
+    const n = Math.min(12, Math.max(1, words.length));
+    if (A && A.setOv) A.setOv(lineIdx, { cuts: n });
     else {
       if (!S.project.overrides) S.project.overrides = {};
-      if (!S.project.overrides[li]) S.project.overrides[li] = {};
-      S.project.overrides[li].cuts = n;
+      if (!S.project.overrides[lineIdx]) S.project.overrides[lineIdx] = {};
+      S.project.overrides[lineIdx].cuts = n;
     }
     if (A && A.replan) A.replan();
-    if (A && A.drawTimeline) A.drawTimeline();
-    status('Dòng ' + (li + 1) + ' → ' + n + ' cut. Kéo vạch VÀNG giữa các khối trên timeline.');
+    return words.slice(0, n);
   }
 
+  function panelEl() {
+    let p = document.getElementById('jzWordTapPanel');
+    if (p) return p;
+    p = document.createElement('div');
+    p.id = 'jzWordTapPanel';
+    p.hidden = true;
+    p.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:24px;z-index:100000;width:min(440px,94vw);background:#12121a;border:2px solid #f59e0b;border-radius:14px;padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.6);color:#eee;font-family:system-ui,sans-serif';
+    p.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <strong style="color:#fbbf24;font-size:15px">Chạm từng từ theo nhạc</strong>
+        <button type="button" id="jzWtClose" style="padding:4px 10px;border-radius:6px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Đóng</button>
+      </div>
+      <div id="jzWtLine" style="font-size:12px;opacity:.75;margin-bottom:6px">—</div>
+      <div id="jzWtWord" style="font-size:28px;font-weight:800;text-align:center;padding:12px 8px;color:#fbbf24;min-height:48px">—</div>
+      <div id="jzWtNext" style="font-size:12px;opacity:.6;text-align:center;margin-bottom:10px">—</div>
+      <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+        <button type="button" id="jzWtTap" style="flex:1;min-width:140px;padding:16px 12px;border:none;border-radius:10px;background:linear-gradient(135deg,#f59e0b,#ea580c);color:#111;font-size:18px;font-weight:800;cursor:pointer">CHẠM</button>
+        <button type="button" id="jzWtBack" style="padding:12px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">↩ Lùi</button>
+      </div>
+      <div style="font-size:11px;opacity:.65;margin-top:10px;line-height:1.4">
+        Phát nhạc → mỗi lần <b>CHẠM</b> (hoặc phím <b>Space</b>) = từ đó bắt đầu đúng lúc đó.<br>
+        Giống đặt điểm chuyển cảnh, nhưng cho từng từ trong dòng.
+      </div>
+    `;
+    document.body.appendChild(p);
+    p.querySelector('#jzWtClose').onclick = stopWordTap;
+    p.querySelector('#jzWtTap').onclick = () => wordTapNow();
+    p.querySelector('#jzWtBack').onclick = () => wordTapBack();
+    return p;
+  }
+
+  function updatePanel() {
+    const p = panelEl();
+    if (!WT.active) { p.hidden = true; return; }
+    p.hidden = false;
+    const S = st();
+    const ln = S && S.plan && S.plan.lines[WT.line];
+    p.querySelector('#jzWtLine').textContent =
+      'Dòng ' + (WT.line + 1) + (ln ? ': ' + (ln.text || '').slice(0, 50) : '') +
+      '  ·  từ ' + (WT.word + 1) + '/' + WT.words.length;
+    const cur = WT.words[WT.word];
+    const nxt = WT.words[WT.word + 1];
+    p.querySelector('#jzWtWord').textContent = cur != null ? cur : '✓ Hết dòng';
+    p.querySelector('#jzWtNext').textContent = nxt != null ? ('Tiếp: ' + nxt) : (cur != null ? 'Từ cuối dòng' : 'Chạm để sang dòng sau / đóng');
+  }
+
+  function startWordTap(fromLine) {
+    const S = st();
+    const A = api();
+    if (!S || !S.plan || !S.plan.lines || !S.plan.lines.length) {
+      alert('Cần dán lời + upload nhạc trước (có timeline).');
+      return;
+    }
+    if (!S.audio) {
+      alert('Upload file nhạc trước.');
+      return;
+    }
+    let li = fromLine;
+    if (li == null || li < 0) {
+      li = 0;
+      for (const ln of S.plan.lines) {
+        if (S.t >= ln.start && S.t < (ln.end || ln.start + 99)) { li = ln.index; break; }
+      }
+    }
+    li = Math.max(0, Math.min(S.plan.lines.length - 1, li));
+    // bỏ interlude
+    while (li < S.plan.lines.length && S.plan.lines[li].interlude) li++;
+    if (li >= S.plan.lines.length) { alert('Hết dòng.'); return; }
+
+    const words = ensureWordCuts(li);
+    if (!words || !words.length) { alert('Dòng này không tách được từ.'); return; }
+
+    WT.active = true;
+    WT.line = li;
+    WT.word = 0;
+    WT.words = words;
+    WT.done = [];
+
+    // seek trước dòng một chút
+    const ln = S.plan.lines[li];
+    const t0 = Math.max(0, (ln.start || 0) - 1.2);
+    if (A && A.pause) A.pause();
+    if (A && A.seek) A.seek(t0);
+    updatePanel();
+    setTimeout(() => { if (A && A.play) A.play(); }, 200);
+    setTimeout(() => {
+      // play if available
+      try {
+        const btn = document.querySelector('[aria-label*="再生"], [aria-label*="Play"], .play, #btnPlay, button.play');
+        // use internal play via clicking transport if needed
+        if (S && !S.playing) {
+          const playBtn = document.querySelector('button[title*="再生"], button[title*="Play"], .transport button');
+          // seek already done; user can hit play — or try space
+        }
+      } catch (e) {}
+    }, 100);
+    // focus
+    const p = panelEl();
+    p.querySelector('#jzWtTap').focus();
+  }
+
+  function wordTapNow() {
+    if (!WT.active) return;
+    const S = st();
+    const A = api();
+    if (!S || !S.plan) return;
+    const t = +S.t.toFixed(3);
+    const li = WT.line;
+    const ln = S.plan.lines[li];
+    if (!ln) return;
+
+    if (WT.word >= WT.words.length) {
+      // sang dòng sau
+      const next = li + 1;
+      if (next < S.plan.lines.length) startWordTap(next);
+      else stopWordTap();
+      return;
+    }
+
+    if (A && A.pushEdit) A.pushEdit();
+
+    if (WT.word === 0) {
+      // từ đầu = lineTimes
+      if (!S.project.timing) S.project.timing = {};
+      if (!S.project.timing.lineTimes) S.project.timing.lineTimes = {};
+      const had = S.project.timing.lineTimes[li];
+      WT.done.push({ type: 'line', li, had });
+      S.project.timing.lineTimes[li] = t;
+      // xóa lineTimes sau nếu lệch
+      for (const k of Object.keys(S.project.timing.lineTimes)) {
+        if (+k > li && S.project.timing.lineTimes[k] <= t + 0.15)
+          delete S.project.timing.lineTimes[k];
+      }
+    } else {
+      // từ 2+ = cutTime[k] relative to line start
+      // sau replan, line start có thể đổi — dùng t - lineTimes[li]
+      const lineStart = (S.project.timing.lineTimes && S.project.timing.lineTimes[li] != null)
+        ? +S.project.timing.lineTimes[li]
+        : ln.start;
+      const rel = +Math.max(0, t - lineStart).toFixed(3);
+      const k = WT.word; // cut index
+      const cur = (S.project.overrides && S.project.overrides[li]) || {};
+      const ct = Object.assign({}, cur.cutTime || {});
+      const had = ct[k];
+      WT.done.push({ type: 'cut', li, k, had });
+      ct[k] = rel;
+      if (A && A.setOv) A.setOv(li, { cutTime: ct, cuts: WT.words.length });
+      else {
+        if (!S.project.overrides) S.project.overrides = {};
+        if (!S.project.overrides[li]) S.project.overrides[li] = {};
+        S.project.overrides[li].cutTime = ct;
+        S.project.overrides[li].cuts = WT.words.length;
+      }
+    }
+
+    WT.word++;
+    if (A && A.replan) A.replan();
+    if (A && A.drawTimeline) A.drawTimeline();
+    updatePanel();
+
+    if (WT.word >= WT.words.length) {
+      // tự sang dòng sau sau 0.4s hoặc chờ chạm
+      // keep panel showing "hết dòng"
+    }
+  }
+
+  function wordTapBack() {
+    if (!WT.active || !WT.done.length) return;
+    const S = st();
+    const A = api();
+    const d = WT.done.pop();
+    if (d.type === 'line') {
+      if (d.had != null) S.project.timing.lineTimes[d.li] = d.had;
+      else if (S.project.timing.lineTimes) delete S.project.timing.lineTimes[d.li];
+      WT.word = 0;
+      WT.line = d.li;
+    } else if (d.type === 'cut') {
+      const cur = (S.project.overrides && S.project.overrides[d.li]) || {};
+      const ct = Object.assign({}, cur.cutTime || {});
+      if (d.had != null) ct[d.k] = d.had;
+      else delete ct[d.k];
+      if (A && A.setOv) A.setOv(d.li, { cutTime: Object.keys(ct).length ? ct : undefined });
+      WT.word = d.k;
+      WT.line = d.li;
+    }
+    // restore words for that line
+    const ln = S.plan.lines[WT.line];
+    WT.words = splitWords(ln && ln.text || '');
+    if (A && A.replan) A.replan();
+    if (A && A.seek) A.seek(Math.max(0, S.t - 2));
+    updatePanel();
+  }
+
+  function stopWordTap() {
+    WT.active = false;
+    const p = document.getElementById('jzWordTapPanel');
+    if (p) p.hidden = true;
+    const A = api();
+    if (A && A.flushSave) A.flushSave();
+    if (A && A.replan) A.replan();
+  }
+
+  // Space = chạm khi panel mở
+  document.addEventListener('keydown', (e) => {
+    if (!WT.active) return;
+    if (e.code === 'Space' || e.key === ' ') {
+      e.preventDefault();
+      wordTapNow();
+    }
+    if (e.key === 'Backspace' && !/INPUT|TEXTAREA/.test((e.target || {}).tagName || '')) {
+      e.preventDefault();
+      wordTapBack();
+    }
+    if (e.key === 'Escape') stopWordTap();
+  });
+
   function buildBar() {
-    if (document.getElementById('jzCutDragBar')) return;
+    if (document.getElementById('jzWordTapBar')) return;
     const bar = document.createElement('div');
-    bar.id = 'jzCutDragBar';
-    bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 10px;margin:6px 0;background:#1a1a22;border:1px solid #444;border-radius:8px;font-size:12px;color:#ddd;z-index:99990';
+    bar.id = 'jzWordTapBar';
+    bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px;margin:8px 0;background:#1a1520;border:2px solid #f59e0b;border-radius:10px;z-index:99990';
     bar.innerHTML = `
-      <button type="button" id="jzCdToggle" style="padding:6px 12px;border-radius:6px;border:none;font-weight:700;cursor:pointer;background:#22c55e;color:#111">Vạch cut: BẬT</button>
-      <button type="button" id="jzCdSplit" style="padding:6px 12px;border-radius:6px;border:none;font-weight:700;cursor:pointer;background:#f59e0b;color:#111">Tách dòng đang phát → cut</button>
-      <span id="jzCdStatus" style="opacity:.9;flex:1;min-width:140px">Kéo vạch vàng giữa các khối = điểm chuyển cảnh cut. Tắt nếu vướng.</span>
+      <button type="button" id="jzWtStart" style="padding:12px 18px;border:none;border-radius:8px;background:linear-gradient(135deg,#f59e0b,#ea580c);color:#111;font-weight:800;font-size:15px;cursor:pointer">
+        ⏱ Chạm từng từ theo nhạc
+      </button>
+      <span style="font-size:12px;color:#ddd;max-width:320px;line-height:1.35">
+        Bật nhạc → bấm nút → mỗi lần <b>CHẠM</b> / phím <b>Space</b> đặt điểm bắt đầu <b>một từ</b> (giống điểm chuyển cảnh).
+      </span>
     `;
     const tl = document.getElementById('timeline');
     if (tl && tl.parentNode) tl.parentNode.insertBefore(bar, tl);
     else document.body.appendChild(bar);
-
-    bar.querySelector('#jzCdToggle').onclick = function () {
-      CD.on = !CD.on;
-      this.textContent = CD.on ? 'Vạch cut: BẬT' : 'Vạch cut: TẮT';
-      this.style.background = CD.on ? '#22c55e' : '#6b7280';
-      status(CD.on ? 'Đã BẬT vạch kéo cut' : 'Đã TẮT — không vướng timeline');
-      const A = api();
-      if (A && A.drawTimeline) A.drawTimeline();
-    };
-    bar.querySelector('#jzCdSplit').onclick = splitLineToCuts;
+    bar.querySelector('#jzWtStart').onclick = () => startWordTap(null);
   }
 
   function boot() {
-    if (!api() || !state()) {
-      setTimeout(boot, 400);
-      return;
-    }
-    hookDraw();
-    hookPointer();
+    if (!api() || !st()) { setTimeout(boot, 400); return; }
     buildBar();
-    const A = api();
-    if (A && A.drawTimeline) A.drawTimeline();
-    status('Sẵn sàng. Có nhiều cut trên dòng → kéo vạch vàng. Hoặc bấm Tách dòng.');
   }
-
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(boot, 300));
-  else setTimeout(boot, 300);
-  setTimeout(boot, 1500);
-  setTimeout(boot, 3000);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(boot, 400));
+  else setTimeout(boot, 400);
+  setTimeout(boot, 2000);
 })();
 </script>
 

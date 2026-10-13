@@ -38020,195 +38020,157 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
 
 
 
+
 <script>
-/* ================================================================
-   CHẠM TỪ — liên tục cả bài, nhẹ máy lúc đang chạm
-   - Không dừng hết dòng
-   - Trong lúc chạm: chỉ ghi thời gian, KHÔNG replan mỗi nhịp (tránh lag)
-   - Đóng / xong: replan 1 lần → website bình thường
-   ================================================================ */
+/* CHẠM TỪ — một mạch cả bài, không ngắt, không lag */
 (() => {
   const api = () => (J && J.uiApi) ? J.uiApi : null;
   const st = () => (J && J.ui) ? J.ui : null;
 
   const WT = {
-    active: false,
-    // flat queue: [{ line, wordIdx, text, isFirstOfLine }]
-    queue: [],
-    qi: 0,
-    done: [],
-    // pending writes — flush on stop
-    lineTimes: {},
-    cutTimes: {}, // line -> { k: rel }
-    cutsN: {},    // line -> n
+    on: false,
+    list: [],   // [{li, wi, text, n, first}]
+    i: 0,
+    undo: [],
+    LT: {},     // line -> abs time
+    CT: {},     // line -> { wi: rel }
+    CN: {},     // line -> n cuts
   };
 
-  function splitWords(text) {
+  function wordsOf(text) {
     const t = String(text || '').trim();
     if (!t) return [];
     if (/\s/.test(t)) return t.split(/\s+/).filter(Boolean);
-    const chars = [...t];
-    if (chars.length <= 8) return chars;
-    const out = [];
-    for (let i = 0; i < chars.length; i += 2) out.push(chars.slice(i, i + 2).join(''));
-    return out;
+    const c = [...t];
+    if (c.length <= 8) return c;
+    const a = [];
+    for (let i = 0; i < c.length; i += 2) a.push(c.slice(i, i + 2).join(''));
+    return a;
   }
 
-  function buildQueue(fromLine) {
+  function buildAll() {
     const S = st();
-    if (!S || !S.plan || !S.plan.lines) return [];
-    const q = [];
-    for (let li = fromLine; li < S.plan.lines.length; li++) {
+    const list = [];
+    if (!S || !S.plan || !S.plan.lines) return list;
+    for (let li = 0; li < S.plan.lines.length; li++) {
       const ln = S.plan.lines[li];
       if (!ln || ln.interlude) continue;
-      const words = splitWords(ln.text || '');
-      if (!words.length) continue;
-      const n = Math.min(12, words.length);
-      for (let w = 0; w < n; w++) {
-        q.push({ line: li, wordIdx: w, text: words[w], isFirst: w === 0, nWords: n });
+      const ws = wordsOf(ln.text);
+      if (!ws.length) continue;
+      const n = Math.min(12, ws.length);
+      for (let wi = 0; wi < n; wi++) {
+        list.push({ li, wi, text: ws[wi], n, first: wi === 0 });
       }
+      WT.CN[li] = n;
     }
-    return q;
+    return list;
   }
 
-  function panelEl() {
-    let p = document.getElementById('jzWordTapPanel');
+  function ui() {
+    let p = document.getElementById('jzWt');
     if (p) return p;
     p = document.createElement('div');
-    p.id = 'jzWordTapPanel';
+    p.id = 'jzWt';
     p.hidden = true;
-    p.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:20px;z-index:100000;width:min(420px,94vw);background:#12121a;border:2px solid #f59e0b;border-radius:14px;padding:12px 14px;box-shadow:0 12px 40px rgba(0,0,0,.55);color:#eee;font-family:system-ui,sans-serif;will-change:transform';
-    p.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px">
-        <strong style="color:#fbbf24;font-size:14px">Chạm từ · liên tục</strong>
-        <button type="button" id="jzWtClose" style="padding:4px 10px;border-radius:6px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Xong</button>
-      </div>
-      <div id="jzWtMeta" style="font-size:11px;opacity:.7;margin-bottom:4px">—</div>
-      <div id="jzWtWord" style="font-size:26px;font-weight:800;text-align:center;padding:10px 6px;color:#fbbf24;min-height:42px">—</div>
-      <div id="jzWtNext" style="font-size:12px;opacity:.55;text-align:center;margin-bottom:8px">—</div>
-      <div style="display:flex;gap:8px">
-        <button type="button" id="jzWtTap" style="flex:1;padding:14px;border:none;border-radius:10px;background:linear-gradient(135deg,#f59e0b,#ea580c);color:#111;font-size:17px;font-weight:800;cursor:pointer">CHẠM</button>
-        <button type="button" id="jzWtBack" style="padding:12px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">↩</button>
-      </div>
-      <div style="font-size:10px;opacity:.55;margin-top:8px">Space = chạm · Esc = xong · Không replan giữa chừng → mượt</div>
-    `;
+    p.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:100000;width:min(400px,92vw);background:#111;border:2px solid #f59e0b;border-radius:12px;padding:12px;color:#eee;font-family:system-ui,sans-serif';
+    p.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center"><b style="color:#fbbf24">Chạm từ</b><button type="button" id="jzWtX" style="padding:4px 10px;border-radius:6px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Xong</button></div>'
+      + '<div id="jzWtC" style="font-size:11px;opacity:.65;margin:6px 0 2px"></div>'
+      + '<div id="jzWtW" style="font-size:28px;font-weight:800;text-align:center;color:#fbbf24;padding:8px 0;min-height:40px"></div>'
+      + '<div id="jzWtN" style="font-size:12px;opacity:.5;text-align:center;margin-bottom:8px"></div>'
+      + '<div style="display:flex;gap:8px"><button type="button" id="jzWtGo" style="flex:1;padding:14px;border:0;border-radius:10px;background:#f59e0b;color:#111;font-weight:800;font-size:17px;cursor:pointer">CHẠM</button>'
+      + '<button type="button" id="jzWtB" style="padding:12px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">↩</button></div>';
     document.body.appendChild(p);
-    p.querySelector('#jzWtClose').onclick = () => stopWordTap(true);
-    p.querySelector('#jzWtTap').onclick = () => wordTapNow();
-    p.querySelector('#jzWtBack').onclick = () => wordTapBack();
+    p.querySelector('#jzWtX').onclick = () => end(true);
+    p.querySelector('#jzWtGo').onclick = () => tap();
+    p.querySelector('#jzWtB').onclick = () => back();
     return p;
   }
 
-  function updatePanel() {
-    const p = panelEl();
-    if (!WT.active) { p.hidden = true; return; }
+  function paint() {
+    const p = ui();
+    if (!WT.on) { p.hidden = true; return; }
     p.hidden = false;
-    const item = WT.queue[WT.qi];
-    const left = WT.queue.length - WT.qi;
-    if (!item) {
-      p.querySelector('#jzWtMeta').textContent = 'Hết bài';
-      p.querySelector('#jzWtWord').textContent = '✓ Xong';
-      p.querySelector('#jzWtNext').textContent = 'Bấm Xong để áp dụng';
+    const tot = WT.list.length;
+    const cur = WT.list[WT.i];
+    if (!cur) {
+      p.querySelector('#jzWtC').textContent = tot + '/' + tot;
+      p.querySelector('#jzWtW').textContent = '✓';
+      p.querySelector('#jzWtN').textContent = 'Bấm Xong';
       return;
     }
-    p.querySelector('#jzWtMeta').textContent =
-      'Dòng ' + (item.line + 1) + ' · từ ' + (item.wordIdx + 1) + '/' + item.nWords + ' · còn ' + left + ' điểm';
-    p.querySelector('#jzWtWord').textContent = item.text;
-    const nxt = WT.queue[WT.qi + 1];
-    p.querySelector('#jzWtNext').textContent = nxt ? ('Tiếp: ' + nxt.text + (nxt.line !== item.line ? ' (dòng ' + (nxt.line + 1) + ')' : '')) : 'Từ cuối';
+    p.querySelector('#jzWtC').textContent = (WT.i + 1) + ' / ' + tot;
+    p.querySelector('#jzWtW').textContent = cur.text;
+    const nx = WT.list[WT.i + 1];
+    p.querySelector('#jzWtN').textContent = nx ? nx.text : '';
   }
 
-  function startWordTap() {
+  function start() {
     const S = st();
     const A = api();
     if (!S || !S.plan || !S.plan.lines || !S.plan.lines.length) {
-      alert('Dán lời + upload nhạc trước.');
+      alert('Dán lời + upload nhạc trước');
       return;
     }
-    if (!S.audio) { alert('Upload nhạc trước.'); return; }
-
-    let from = 0;
-    for (const ln of S.plan.lines) {
-      if (S.t >= ln.start && S.t < (ln.end || ln.start + 99)) { from = ln.index; break; }
-    }
-
-    const queue = buildQueue(from);
-    if (!queue.length) { alert('Không có từ để chạm.'); return; }
-
-    WT.active = true;
-    WT.queue = queue;
-    WT.qi = 0;
-    WT.done = [];
-    WT.lineTimes = {};
-    WT.cutTimes = {};
-    WT.cutsN = {};
-
-    // pre-set cuts count in memory only (apply on flush)
-    for (const it of queue) {
-      WT.cutsN[it.line] = it.nWords;
-    }
-
-    const first = queue[0];
-    const ln = S.plan.lines[first.line];
-    const t0 = Math.max(0, (ln && ln.start || 0) - 0.8);
+    if (!S.audio) { alert('Upload nhạc trước'); return; }
+    WT.CN = {};
+    const list = buildAll();
+    if (!list.length) { alert('Không có từ'); return; }
+    WT.on = true;
+    WT.list = list;
+    WT.i = 0;
+    WT.undo = [];
+    WT.LT = {};
+    WT.CT = {};
     if (A && A.pause) A.pause();
-    if (A && A.seek) A.seek(t0);
-    updatePanel();
-    setTimeout(() => { if (A && A.play) A.play(); }, 150);
-    panelEl().querySelector('#jzWtTap').focus();
+    if (A && A.seek) A.seek(0);
+    paint();
+    setTimeout(() => { if (A && A.play) A.play(); }, 120);
+    ui().querySelector('#jzWtGo').focus();
   }
 
-  function wordTapNow() {
-    if (!WT.active) return;
+  function tap() {
+    if (!WT.on) return;
     const S = st();
     if (!S) return;
-    const item = WT.queue[WT.qi];
-    if (!item) {
-      stopWordTap(true);
-      return;
-    }
+    const cur = WT.list[WT.i];
+    if (!cur) return;
     const t = +S.t.toFixed(3);
 
-    if (item.isFirst) {
-      WT.done.push({ type: 'line', li: item.line, had: WT.lineTimes[item.line], qi: WT.qi });
-      WT.lineTimes[item.line] = t;
+    if (cur.first) {
+      WT.undo.push({ i: WT.i, kind: 'L', li: cur.li, old: WT.LT[cur.li] });
+      WT.LT[cur.li] = t;
     } else {
-      // relative: cần line start đã chạm
-      const lineStart = WT.lineTimes[item.line] != null
-        ? WT.lineTimes[item.line]
-        : (S.plan.lines[item.line] && S.plan.lines[item.line].start) || 0;
-      const rel = +Math.max(0, t - lineStart).toFixed(3);
-      if (!WT.cutTimes[item.line]) WT.cutTimes[item.line] = {};
-      const had = WT.cutTimes[item.line][item.wordIdx];
-      WT.done.push({ type: 'cut', li: item.line, k: item.wordIdx, had, qi: WT.qi });
-      WT.cutTimes[item.line][item.wordIdx] = rel;
+      const ls = WT.LT[cur.li] != null ? WT.LT[cur.li]
+        : ((S.plan.lines[cur.li] && S.plan.lines[cur.li].start) || 0);
+      const rel = +Math.max(0, t - ls).toFixed(3);
+      if (!WT.CT[cur.li]) WT.CT[cur.li] = {};
+      WT.undo.push({ i: WT.i, kind: 'C', li: cur.li, wi: cur.wi, old: WT.CT[cur.li][cur.wi] });
+      WT.CT[cur.li][cur.wi] = rel;
     }
 
-    WT.qi++;
-    // CHỈ cập nhật chữ trên panel — không replan, không vẽ timeline
-    updatePanel();
-
-    if (WT.qi >= WT.queue.length) {
-      // hết bài — chờ bấm Xong
-    }
+    WT.i++;
+    // chỉ đổi chữ — không replan, không seek, không pause
+    paint();
   }
 
-  function wordTapBack() {
-    if (!WT.active || !WT.done.length) return;
-    const d = WT.done.pop();
-    WT.qi = d.qi;
-    if (d.type === 'line') {
-      if (d.had != null) WT.lineTimes[d.li] = d.had;
-      else delete WT.lineTimes[d.li];
+  function back() {
+    if (!WT.on || !WT.undo.length) return;
+    const u = WT.undo.pop();
+    WT.i = u.i;
+    if (u.kind === 'L') {
+      if (u.old != null) WT.LT[u.li] = u.old; else delete WT.LT[u.li];
     } else {
-      if (!WT.cutTimes[d.li]) WT.cutTimes[d.li] = {};
-      if (d.had != null) WT.cutTimes[d.li][d.k] = d.had;
-      else delete WT.cutTimes[d.li][d.k];
+      if (!WT.CT[u.li]) WT.CT[u.li] = {};
+      if (u.old != null) WT.CT[u.li][u.wi] = u.old; else delete WT.CT[u.li][u.wi];
     }
-    updatePanel();
+    paint();
   }
 
-  function flushToProject() {
+  function end(apply) {
+    WT.on = false;
+    const p = document.getElementById('jzWt');
+    if (p) p.hidden = true;
+    if (!apply) return;
     const S = st();
     const A = api();
     if (!S || !S.project) return;
@@ -38216,80 +38178,52 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
     if (!S.project.timing.lineTimes) S.project.timing.lineTimes = {};
     if (!S.project.overrides) S.project.overrides = {};
 
-    for (const li of Object.keys(WT.lineTimes)) {
-      S.project.timing.lineTimes[li] = WT.lineTimes[li];
-    }
-    for (const li of Object.keys(WT.cutsN)) {
-      const n = WT.cutsN[li];
-      const ct = WT.cutTimes[li] || {};
-      if (A && A.setOv) {
-        A.setOv(+li, {
-          cuts: n,
-          cutTime: Object.keys(ct).length ? ct : undefined
-        });
-      } else {
+    for (const li of Object.keys(WT.LT)) S.project.timing.lineTimes[li] = WT.LT[li];
+    for (const li of Object.keys(WT.CN)) {
+      const n = WT.CN[li];
+      const ct = WT.CT[li] || {};
+      if (A && A.setOv) A.setOv(+li, { cuts: n, cutTime: Object.keys(ct).length ? Object.assign({}, ct) : undefined });
+      else {
         if (!S.project.overrides[li]) S.project.overrides[li] = {};
         S.project.overrides[li].cuts = n;
-        if (Object.keys(ct).length) S.project.overrides[li].cutTime = ct;
+        if (Object.keys(ct).length) S.project.overrides[li].cutTime = Object.assign({}, ct);
       }
     }
+    if (A && A.replan) A.replan();
+    if (A && A.drawTimeline) A.drawTimeline();
+    if (A && A.renderLines) A.renderLines();
+    if (A && A.flushSave) A.flushSave();
   }
 
-  function stopWordTap(apply) {
-    WT.active = false;
-    const p = document.getElementById('jzWordTapPanel');
-    if (p) p.hidden = true;
-    const A = api();
-    if (apply) {
-      flushToProject();
-      // replan MỘT LẦN khi xong → timeline + video đúng
-      if (A && A.replan) A.replan();
-      if (A && A.drawTimeline) A.drawTimeline();
-      if (A && A.renderLines) A.renderLines();
-      if (A && A.flushSave) A.flushSave();
-    }
-    WT.queue = [];
-    WT.qi = 0;
-    WT.done = [];
-  }
-
-  document.addEventListener('keydown', (e) => {
-    if (!WT.active) return;
+  document.addEventListener('keydown', e => {
+    if (!WT.on) return;
     if (e.code === 'Space' || e.key === ' ') {
-      e.preventDefault();
-      e.stopPropagation();
-      wordTapNow();
-    } else if (e.key === 'Backspace' && !/INPUT|TEXTAREA|SELECT/.test((e.target && e.target.tagName) || '')) {
-      e.preventDefault();
-      wordTapBack();
+      e.preventDefault(); e.stopPropagation();
+      tap();
     } else if (e.key === 'Escape') {
       e.preventDefault();
-      stopWordTap(true);
+      end(true);
+    } else if (e.key === 'Backspace' && !/INPUT|TEXTAREA|SELECT/.test((e.target && e.target.tagName) || '')) {
+      e.preventDefault();
+      back();
     }
   }, true);
 
-  function buildBar() {
-    if (document.getElementById('jzWordTapBar')) return;
-    const bar = document.createElement('div');
-    bar.id = 'jzWordTapBar';
-    bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px;margin:8px 0;background:#1a1520;border:2px solid #f59e0b;border-radius:10px';
-    bar.innerHTML = `
-      <button type="button" id="jzWtStart" style="padding:12px 18px;border:none;border-radius:8px;background:linear-gradient(135deg,#f59e0b,#ea580c);color:#111;font-weight:800;font-size:15px;cursor:pointer">
-        ⏱ Chạm từng từ theo nhạc
-      </button>
-      <span style="font-size:12px;color:#ccc;max-width:340px;line-height:1.35">
-        Chạm liên tục cả bài (Space). Lúc chạm không lag. Bấm <b>Xong</b> mới áp dụng vào timeline.
-      </span>
-    `;
+  function bar() {
+    if (document.getElementById('jzWtBar')) return;
+    const b = document.createElement('div');
+    b.id = 'jzWtBar';
+    b.style.cssText = 'padding:8px;margin:6px 0';
+    b.innerHTML = '<button type="button" id="jzWtStart" style="padding:12px 16px;border:0;border-radius:8px;background:#f59e0b;color:#111;font-weight:800;font-size:15px;cursor:pointer">⏱ Chạm từng từ theo nhạc</button>';
     const tl = document.getElementById('timeline');
-    if (tl && tl.parentNode) tl.parentNode.insertBefore(bar, tl);
-    else document.body.appendChild(bar);
-    bar.querySelector('#jzWtStart').onclick = () => startWordTap();
+    if (tl && tl.parentNode) tl.parentNode.insertBefore(b, tl);
+    else document.body.appendChild(b);
+    b.querySelector('#jzWtStart').onclick = start;
   }
 
   function boot() {
     if (!api() || !st()) { setTimeout(boot, 400); return; }
-    buildBar();
+    bar();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(boot, 400));
   else setTimeout(boot, 400);

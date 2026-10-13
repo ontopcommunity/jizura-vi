@@ -38159,5 +38159,249 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
 })();
 </script>
 
+
+<script>
+/* ================================================================
+   JIZURA VI — AUTO LYRIC ALIGN (mọi ngôn ngữ)
+   Tự căn chỉnh lời đã dán với nhạc đã upload.
+   Dùng energy + beat + silence detection (không cần ASR nặng).
+   Giữ nguyên toàn bộ tính năng thủ công (tap, kéo marker, nhập giây).
+   ================================================================ */
+(() => {
+  if (typeof J === 'undefined' || typeof window === 'undefined') return;
+  console.log('[AUTO-ALIGN] Installing multi-language lyric auto-align...');
+
+  // ---------- helpers ----------
+  function normalizeText(s) {
+    return String(s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  // Tìm vùng "có tiếng" từ energy envelope (đã có sẵn trong S.audio)
+  function findVocalRegions(audio, minDur = 0.35) {
+    if (!audio || !audio.energy || !audio.energy.length) return null;
+    const e = audio.energy, rate = audio.energyRate || 20;
+    // threshold adaptive
+    let sum = 0, sum2 = 0;
+    for (let i = 0; i < e.length; i++) { sum += e[i]; sum2 += e[i] * e[i]; }
+    const mean = sum / e.length;
+    const std = Math.sqrt(Math.max(0, sum2 / e.length - mean * mean));
+    const th = mean + std * 0.35;
+
+    const regions = [];
+    let start = null;
+    for (let i = 0; i < e.length; i++) {
+      const on = e[i] >= th;
+      if (on && start === null) start = i / rate;
+      if (!on && start !== null) {
+        const end = i / rate;
+        if (end - start >= minDur) regions.push({ start, end });
+        start = null;
+      }
+    }
+    if (start !== null) {
+      const end = e.length / rate;
+      if (end - start >= minDur) regions.push({ start, end });
+    }
+    // gộp vùng gần nhau
+    const merged = [];
+    for (const r of regions) {
+      if (merged.length && r.start - merged[merged.length - 1].end < 0.4) {
+        merged[merged.length - 1].end = r.end;
+      } else merged.push({ ...r });
+    }
+    return merged.length ? merged : null;
+  }
+
+  // Phân bố dòng lời vào các vùng vocal / toàn bộ thời lượng
+  function distributeLines(lines, duration, regions, beats) {
+    const n = lines.length;
+    if (n === 0) return {};
+    const times = {};
+
+    // Chỉ lấy dòng thực (bỏ interlude comment nếu muốn, nhưng giữ index)
+    const realIdx = [];
+    for (let i = 0; i < n; i++) {
+      const ln = lines[i];
+      if (ln && (ln.interlude || (ln.text && ln.text.trim()))) realIdx.push(i);
+      else realIdx.push(i);
+    }
+
+    if (regions && regions.length >= 1) {
+      // Map tỷ lệ theo độ dài vùng vocal
+      const totalVocal = regions.reduce((s, r) => s + (r.end - r.start), 0) || duration;
+      let linePtr = 0;
+      const linesPerRegion = realIdx.length / regions.length;
+
+      for (let ri = 0; ri < regions.length; ri++) {
+        const r = regions[ri];
+        const count = Math.max(1, Math.round((ri === regions.length - 1)
+          ? (realIdx.length - linePtr)
+          : linesPerRegion));
+        const slice = realIdx.slice(linePtr, linePtr + count);
+        linePtr += count;
+        if (!slice.length) continue;
+        const span = r.end - r.start;
+        for (let k = 0; k < slice.length; k++) {
+          const t = r.start + (span * k) / Math.max(1, slice.length);
+          times[slice[k]] = +t.toFixed(3);
+        }
+      }
+      // fill remaining
+      for (let i = linePtr; i < realIdx.length; i++) {
+        times[realIdx[i]] = +(duration * 0.9).toFixed(3);
+      }
+    } else {
+      // Fallback: chia đều theo duration, snap nhẹ theo beat nếu có
+      const usable = Math.max(1, duration * 0.92);
+      const step = usable / Math.max(1, n);
+      for (let i = 0; i < n; i++) {
+        let t = i * step + 0.15;
+        if (beats && beats.length) {
+          // snap tới beat gần nhất trong ±0.25s
+          let best = t, bd = 0.25;
+          for (const b of beats) {
+            const d = Math.abs(b - t);
+            if (d < bd) { bd = d; best = b; }
+          }
+          t = best;
+        }
+        times[i] = +Math.max(0, Math.min(duration - 0.05, t)).toFixed(3);
+      }
+    }
+
+    // Đảm bảo tăng dần
+    let prev = -0.05;
+    for (let i = 0; i < n; i++) {
+      let t = times[i] != null ? times[i] : prev + 0.8;
+      if (t <= prev) t = prev + 0.35;
+      times[i] = +t.toFixed(3);
+      prev = t;
+    }
+    return times;
+  }
+
+  // Main auto-align function
+  J.autoAlignLyrics = async function (opts = {}) {
+    const S = window.S; // UI state
+    if (!S || !S.project) throw new Error('Chưa có project');
+    if (!S.audio || !S.audio.buffer) throw new Error('Hãy upload file nhạc trước');
+
+    const parsed = J.parseLyrics(S.project.lyrics || '');
+    const lines = parsed.lines || [];
+    if (!lines.length) throw new Error('Chưa có lời bài hát để căn');
+
+    const duration = S.audio.duration || S.audio.buffer.duration;
+    const regions = findVocalRegions(S.audio);
+    const beats = (S.plan && S.plan.beats) || (S.audio.beats) || [];
+
+    const times = distributeLines(lines, duration, regions, beats);
+
+    if (!S.project.timing) S.project.timing = {};
+    S.project.timing.lineTimes = times;
+
+    // Trigger replan nếu có
+    if (typeof window.replan === 'function') window.replan();
+    else if (S.need !== undefined) S.need = true;
+
+    return { count: Object.keys(times).length, regions: regions ? regions.length : 0, duration };
+  };
+
+  // ---------- UI button injection ----------
+  function addAutoAlignButton() {
+    // Tìm khu vực timing / tap
+    const candidates = [
+      document.getElementById('tapPanel'),
+      document.querySelector('[id*="tap"]'),
+      document.querySelector('.tap'),
+      document.querySelector('button[title*="tap"], button[title*="Tap"], button[title*="đồng bộ"]'),
+    ];
+    let anchor = null;
+    for (const c of candidates) if (c) { anchor = c; break; }
+
+    // Fallback: tìm nút liên quan timing
+    if (!anchor) {
+      const btns = document.querySelectorAll('button');
+      for (const b of btns) {
+        const t = (b.textContent || b.title || '').toLowerCase();
+        if (t.includes('tap') || t.includes('đồng bộ') || t.includes('sync') || t.includes('lrc')) {
+          anchor = b.parentElement || b;
+          break;
+        }
+      }
+    }
+
+    if (document.getElementById('jzAutoAlignBtn')) return;
+
+    const btn = document.createElement('button');
+    btn.id = 'jzAutoAlignBtn';
+    btn.type = 'button';
+    btn.className = 'ghost';
+    btn.style.cssText = 'margin:4px 6px;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;background:linear-gradient(135deg,#0ea5e9,#6366f1);color:#fff;border:none;';
+    btn.innerHTML = '⚡ Tự căn chỉnh lời';
+    btn.title = 'Tự động căn thời gian từng dòng lời với nhạc (dựa trên energy + beat). Hỗ trợ mọi ngôn ngữ. Vẫn giữ chỉnh tay.';
+
+    btn.onclick = async () => {
+      btn.disabled = true;
+      const old = btn.innerHTML;
+      btn.innerHTML = '⏳ Đang căn...';
+      try {
+        const r = await J.autoAlignLyrics();
+        btn.innerHTML = `✅ Đã căn ${r.count} dòng`;
+        // force UI refresh
+        if (typeof window.renderLineList === 'function') window.renderLineList();
+        else if (typeof window.rebuildLines === 'function') window.rebuildLines();
+        else location.reload(); // last resort only if needed — better avoid
+        setTimeout(() => { btn.innerHTML = old; btn.disabled = false; }, 2500);
+      } catch (e) {
+        console.error(e);
+        btn.innerHTML = '❌ ' + (e.message || e);
+        setTimeout(() => { btn.innerHTML = old; btn.disabled = false; }, 3500);
+      }
+    };
+
+    // Chèn vào UI
+    if (anchor) {
+      if (anchor.tagName === 'BUTTON') anchor.parentNode.insertBefore(btn, anchor.nextSibling);
+      else anchor.appendChild(btn);
+    } else {
+      // floating
+      btn.style.position = 'fixed';
+      btn.style.bottom = '18px';
+      btn.style.right = '18px';
+      btn.style.zIndex = '99999';
+      document.body.appendChild(btn);
+    }
+
+    // Thêm nút thứ 2: "Xóa căn chỉnh tự động" (reset lineTimes)
+    const btn2 = document.createElement('button');
+    btn2.id = 'jzClearAlignBtn';
+    btn2.type = 'button';
+    btn2.className = 'ghost';
+    btn2.style.cssText = 'margin:4px 6px;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;';
+    btn2.textContent = '↺ Xóa căn tự động';
+    btn2.title = 'Xóa toàn bộ thời gian đã căn (trở về ước lượng mặc định). Tap thủ công vẫn giữ được nếu bạn muốn.';
+    btn2.onclick = () => {
+      if (!window.S || !S.project) return;
+      if (S.project.timing) S.project.timing.lineTimes = {};
+      if (typeof window.replan === 'function') window.replan();
+      btn2.textContent = 'Đã xóa';
+      setTimeout(() => btn2.textContent = '↺ Xóa căn tự động', 1500);
+    };
+    if (btn.parentNode) btn.parentNode.insertBefore(btn2, btn.nextSibling);
+  }
+
+  // Chạy sau khi UI sẵn sàng
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => setTimeout(addAutoAlignButton, 800));
+  } else {
+    setTimeout(addAutoAlignButton, 800);
+  }
+  // Thử lại sau 2s phòng UI render muộn
+  setTimeout(addAutoAlignButton, 2500);
+
+  console.log('[AUTO-ALIGN] Ready. Gọi J.autoAlignLyrics() hoặc bấm nút "Tự căn chỉnh lời"');
+})();
+</script>
+
 </body>
 </html>

@@ -38015,140 +38015,147 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
 
 </script>
 
+
 <script>
-/* === JIZURA VI FONT PACK (auto inject) ===
-   Thêm hàng loạt font Google hỗ trợ tiếng Việt đầy đủ dấu.
-   Ưu tiên Be Vietnam Pro, Inter, Noto, Roboto...
-   Thêm language 'vi' + auto-detect dấu Việt.
-*/
+/* ================================================================
+   JIZURA VI — FULL FONT REPLACEMENT (Việt hóa toàn bộ)
+   Thay thế 100% font Nhật bản gốc bằng font hỗ trợ tiếng Việt đầy đủ dấu.
+   Giữ nguyên key để engine / style / omakase vẫn chạy đúng.
+   ================================================================ */
 (() => {
-  if (typeof J === 'undefined') return;
-  console.log('[JIZURA-VI] Loading Vietnamese font pack...');
+  if (typeof J === 'undefined') { console.warn('[VI-FONTS] J not ready'); return; }
+  console.log('[VI-FONTS] Replacing all fonts with Vietnamese versions...');
 
-  // 1. Mở rộng danh sách ngôn ngữ
-  if (J.LANGS && !J.LANGS.includes('vi')) {
-    J.LANGS.push('vi');
-    if (J.LANG_LABEL) J.LANG_LABEL.vi = 'Tiếng Việt';
-  }
+  const VI_SANS_FB = '"Be Vietnam Pro","Inter","Noto Sans","Roboto","Open Sans",sans-serif';
+  const VI_SERIF_FB = '"Noto Serif","Lora","Source Serif 4","Merriweather",serif';
 
-  // 2. Font Việt hóa chính (Google Fonts, có subset vietnamese)
-  const VI_SANS = 'Be+Vietnam+Pro:wght@100;200;300;400;500;600;700;800;900';
-  const VI_SANS2 = 'Inter:wght@100..900';
-  const VI_SANS3 = 'Roboto:wght@100;300;400;500;700;900';
-  const VI_SANS4 = 'Montserrat:wght@100..900';
-  const VI_SANS5 = 'Noto+Sans:wght@100..900';
-  const VI_SANS6 = 'Open+Sans:wght@300..800';
-  const VI_SANS7 = 'Source+Sans+3:wght@200..900';
-  const VI_SANS8 = 'Nunito:wght@200..1000';
-  const VI_SANS9 = 'Work+Sans:wght@100..900';
-  const VI_SANS10 = 'IBM+Plex+Sans:wght@100;200;300;400;500;600;700';
-  const VI_SANS11 = 'Manrope:wght@200..800';
-  const VI_SANS12 = 'Plus+Jakarta+Sans:wght@200..800';
-  const VI_SANS13 = 'Outfit:wght@100..900';
-  const VI_SANS14 = 'DM+Sans:wght@100..1000';
-  const VI_SANS15 = 'Lexend:wght@100..900';
-  const VI_SANS16 = 'Figtree:wght@300..900';
-  const VI_SANS17 = 'Sora:wght@100..800';
-  const VI_SANS18 = 'Mulish:wght@200..1000';
-  const VI_SANS19 = 'Rubik:wght@300..900';
-  const VI_SANS20 = 'Poppins:wght@100;200;300;400;500;600;700;800;900';
-  const VI_SERIF = 'Noto+Serif:wght@100..900';
-  const VI_SERIF2 = 'Lora:wght@400..700';
-  const VI_SERIF3 = 'Merriweather:wght@300;400;700;900';
-  const VI_SERIF4 = 'Source+Serif+4:wght@200..900';
-  const VI_SERIF5 = 'EB+Garamond:wght@400..800';
-  const VI_DISP = 'Oswald:wght@200..700';
-  const VI_DISP2 = 'Anton';
-  const VI_DISP3 = 'Bebas+Neue';
-  const VI_DISP4 = 'Playfair+Display:wght@400..900';
-  const VI_ROUND = 'Nunito:wght@200..1000';
-  const VI_ROUND2 = 'Varela+Round';
-  const VI_ROUND3 = 'Quicksand:wght@300..700';
+  // ========== CATALOGUE MỚI (Việt hóa) ==========
+  J.FONTS = {
+    // Gothic / Sans (thay Noto Sans JP)
+    gothic_black:  { label: 'Be Vietnam Pro Black',     family: '"Be Vietnam Pro"', weight: 900, kind: 'gothic', fb: VI_SANS_FB, gf: 'Be+Vietnam+Pro:wght@100;200;300;400;500;600;700;800;900' },
+    gothic_bold:   { label: 'Be Vietnam Pro Bold',      family: '"Be Vietnam Pro"', weight: 700, kind: 'gothic', fb: VI_SANS_FB, gf: 'Be+Vietnam+Pro:wght@100;200;300;400;500;600;700;800;900' },
+    gothic_med:    { label: 'Be Vietnam Pro Medium',    family: '"Be Vietnam Pro"', weight: 500, kind: 'gothic', fb: VI_SANS_FB, gf: 'Be+Vietnam+Pro:wght@100;200;300;400;500;600;700;800;900' },
+    gothic_light:  { label: 'Be Vietnam Pro Light',     family: '"Be Vietnam Pro"', weight: 300, kind: 'gothic', fb: VI_SANS_FB, gf: 'Be+Vietnam+Pro:wght@100;200;300;400;500;600;700;800;900' },
 
-  // 3. Map role → font Việt (giữ cảm giác gốc: gothic → sans, mincho → serif, pop → round...)
-  const F = (family, weight, gf) => ({ family, weight, gf });
-  if (!J.LANG_FACES) J.LANG_FACES = {};
-  J.LANG_FACES.vi = {
-    sans: F('Be Vietnam Pro', 500, VI_SANS),
-    serif: F('Noto Serif', 500, VI_SERIF),
-    fbSans: '"Be Vietnam Pro","Inter","Roboto","Noto Sans","Open Sans",sans-serif',
-    fbSerif: '"Noto Serif","Lora","Merriweather","Source Serif 4",serif',
-    map: {
-      gothic_black: F('Be Vietnam Pro', 900, VI_SANS),
-      gothic_bold:  F('Be Vietnam Pro', 700, VI_SANS),
-      gothic_med:   F('Be Vietnam Pro', 500, VI_SANS),
-      gothic_light: F('Be Vietnam Pro', 300, VI_SANS),
-      zenkaku:      F('Inter', 900, VI_SANS2),
-      sansui:       F('Roboto', 500, VI_SANS3),
-      mincho_black: F('Noto Serif', 900, VI_SERIF),
-      mincho_bold:  F('Noto Serif', 700, VI_SERIF),
-      mincho:       F('Noto Serif', 500, VI_SERIF),
-      mincho_light: F('Noto Serif', 300, VI_SERIF),
-      tokumin:      F('Lora', 700, VI_SERIF2),
-      shippori:     F('Merriweather', 700, VI_SERIF3),
-      dela:         F('Oswald', 700, VI_DISP),
-      round:        F('Nunito', 800, VI_ROUND),
-      pop:          F('Quicksand', 700, VI_ROUND3),
-      kiwi:         F('Varela Round', 400, VI_ROUND2),
-      klee:         F('Source Serif 4', 600, VI_SERIF4),
-      brush:        F('EB Garamond', 600, VI_SERIF5),
-      reggae:       F('Anton', 400, VI_DISP2),
-      rampart:      F('Bebas Neue', 400, VI_DISP3),
-      potta:        F('Playfair Display', 700, VI_DISP4),
-    }
+    // Display heavy (thay Dela Gothic One)
+    dela:          { label: 'Oswald Bold',              family: '"Oswald"', weight: 700, kind: 'display', fb: VI_SANS_FB, gf: 'Oswald:wght@200;300;400;500;600;700' },
+
+    // Black gothic (thay Zen Kaku)
+    zenkaku:       { label: 'Inter Black',              family: '"Inter"', weight: 900, kind: 'gothic', fb: VI_SANS_FB, gf: 'Inter:wght@100..900' },
+
+    // Mincho / Serif (thay Zen Old Mincho + Noto Serif JP)
+    mincho_black:  { label: 'Noto Serif Black',         family: '"Noto Serif"', weight: 900, kind: 'mincho', fb: VI_SERIF_FB, gf: 'Noto+Serif:wght@100..900' },
+    mincho_bold:   { label: 'Noto Serif Bold',          family: '"Noto Serif"', weight: 700, kind: 'mincho', fb: VI_SERIF_FB, gf: 'Noto+Serif:wght@100..900' },
+    mincho:        { label: 'Noto Serif Medium',        family: '"Noto Serif"', weight: 500, kind: 'mincho', fb: VI_SERIF_FB, gf: 'Noto+Serif:wght@100..900' },
+    mincho_light:  { label: 'Noto Serif Light',         family: '"Noto Serif"', weight: 300, kind: 'mincho', fb: VI_SERIF_FB, gf: 'Noto+Serif:wght@100..900' },
+
+    // Tokumin style (thay Kaisei Tokumin)
+    tokumin:       { label: 'Playfair Display Bold',    family: '"Playfair Display"', weight: 700, kind: 'mincho', fb: VI_SERIF_FB, gf: 'Playfair+Display:wght@400..900' },
+
+    // Rounded (thay M PLUS Rounded)
+    round:         { label: 'Nunito ExtraBold',         family: '"Nunito"', weight: 800, kind: 'round', fb: VI_SANS_FB, gf: 'Nunito:wght@200..1000' },
+
+    // Pop (thay Mochiy Pop One)
+    pop:           { label: 'Quicksand Bold',           family: '"Quicksand"', weight: 700, kind: 'display', fb: VI_SANS_FB, gf: 'Quicksand:wght@300..700' },
+
+    // Pixel (thay DotGothic16) — giữ + fallback Latin
+    dot:           { label: 'DotGothic16',              family: '"DotGothic16"', weight: 400, kind: 'pixel', fb: VI_SANS_FB, gf: 'DotGothic16' },
+
+    // Brush / Hand (thay Yuji Syuku)
+    brush:         { label: 'EB Garamond',              family: '"EB Garamond"', weight: 500, kind: 'brush', fb: VI_SERIF_FB, gf: 'EB+Garamond:wght@400..800' },
+
+    // Mono (IBM Plex Mono đã hỗ trợ VN)
+    mono:          { label: 'IBM Plex Mono',            family: '"IBM Plex Mono"', weight: 500, kind: 'mono', fb: '"IBM Plex Sans",' + VI_SANS_FB, gf: 'IBM+Plex+Mono:wght@400;500;600;700' },
+
+    // Reggae style (thay Reggae One)
+    reggae:        { label: 'Anton',                    family: '"Anton"', weight: 400, kind: 'display', fb: VI_SANS_FB, gf: 'Anton' },
+
+    // Rampart (thay Rampart One)
+    rampart:       { label: 'Bebas Neue',               family: '"Bebas Neue"', weight: 400, kind: 'display', fb: VI_SANS_FB, gf: 'Bebas+Neue' },
+
+    // Potta (thay Potta One)
+    potta:         { label: 'Oswald Medium',            family: '"Oswald"', weight: 500, kind: 'brush', fb: VI_SANS_FB, gf: 'Oswald:wght@200;300;400;500;600;700' },
+
+    // Kiwi Maru → rounded soft
+    kiwi:          { label: 'Varela Round',             family: '"Varela Round"', weight: 400, kind: 'round', fb: VI_SANS_FB, gf: 'Varela+Round' },
+
+    // Klee One → hand
+    klee:          { label: 'Caveat Medium',            family: '"Caveat"', weight: 500, kind: 'hand', fb: VI_SERIF_FB, gf: 'Caveat:wght@400..700' },
+
+    // Shippori Mincho
+    shippori:      { label: 'Lora Bold',                family: '"Lora"', weight: 700, kind: 'mincho', fb: VI_SERIF_FB, gf: 'Lora:wght@400..700' },
+
+    // IBM Plex Sans JP → IBM Plex Sans (có VN)
+    sansui:        { label: 'IBM Plex Sans',            family: '"IBM Plex Sans"', weight: 500, kind: 'gothic', fb: VI_SANS_FB, gf: 'IBM+Plex+Sans:wght@100;200;300;400;500;600;700' },
   };
 
-  // 4. Cải thiện detectLang: nếu có dấu Việt đặc trưng → 'vi'
-  const origDetect = J.detectLang;
+  // ========== Language system ==========
+  if (J.LANGS && !J.LANGS.includes('vi')) J.LANGS.push('vi');
+  if (J.LANG_LABEL) J.LANG_LABEL.vi = 'Tiếng Việt';
+
+  // Mặc định dùng vi
+  J.lang = 'vi';
+  if (typeof J.setLang === 'function') {
+    try { J.setLang('vi'); } catch(e) {}
+  }
+
+  // Auto-detect ưu tiên tiếng Việt
+  const _origDetect = J.detectLang;
   J.detectLang = (text) => {
     const t = String(text || '');
-    // Dấu đặc trưng tiếng Việt (ơ ư ă â ê ô đ + tổ hợp thanh)
-    if (/[ơưăâêôđƠƯĂÂÊÔĐàáảãạèéẻẽẹìíỉĩịòóỏõọùúủũụỳýỷỹỵÀÁẢÃẠÈÉẺẼẸÌÍỈĨỊÒÓỎÕỌÙÚỦŨỤỲÝỶỸỴ]/.test(t) ||
-        /[ầấẩẫậằắẳẵặềếểễệồốổỗộờớởỡợừứửữự]/.test(t)) {
-      return 'vi';
-    }
-    return origDetect ? origDetect(t) : 'en';
+    if (/[ơưăâêôđƠƯĂÂÊÔĐàáảãạèéẻẽẹìíỉĩịòóỏõọùúủũụỳýỷỹỵÀÁẢÃẠÈÉẺẼẸÌÍỈĨỊÒÓỎÕỌÙÚỦŨỤỲÝỶỸỴầấẩẫậằắẳẵặềếểễệồốổỗộờớởỡợừứửữự]/.test(t)) return 'vi';
+    return _origDetect ? _origDetect(t) : 'en';
   };
 
-  // 5. Preload hàng loạt font Việt (lazy, không block)
-  const allGF = [
-    VI_SANS, VI_SANS2, VI_SANS3, VI_SANS4, VI_SANS5, VI_SANS6, VI_SANS7,
-    VI_SANS8, VI_SANS9, VI_SANS10, VI_SANS11, VI_SANS12, VI_SANS13,
-    VI_SANS14, VI_SANS15, VI_SANS16, VI_SANS17, VI_SANS18, VI_SANS19, VI_SANS20,
-    VI_SERIF, VI_SERIF2, VI_SERIF3, VI_SERIF4, VI_SERIF5,
-    VI_DISP, VI_DISP2, VI_DISP3, VI_DISP4, VI_ROUND2, VI_ROUND3
-  ];
-  // Chỉ load khi cần (qua ensureFonts), nhưng đăng ký sẵn để attachFamily dùng được
-  const origAttach = window.attachFamily || (typeof attachFamily !== 'undefined' ? attachFamily : null);
-  // Force setLang('vi') nếu detect ra vi
-  const origSetLang = J.setLang;
-  J.setLang = (l) => {
-    if (l === 'vi' || (l === 'auto' && J.detectLang((J.project && J.project.lyrics) || '') === 'vi')) {
-      J.lang = 'vi';
-      if (origSetLang) try { origSetLang('vi'); } catch(e) {}
-      return;
-    }
-    if (origSetLang) return origSetLang(l);
+  // LANG_FACES.vi trỏ về chính catalogue mới (không cần map lại)
+  if (!J.LANG_FACES) J.LANG_FACES = {};
+  J.LANG_FACES.vi = {
+    sans:  { family: 'Be Vietnam Pro', weight: 500, gf: 'Be+Vietnam+Pro:wght@100;200;300;400;500;600;700;800;900' },
+    serif: { family: 'Noto Serif', weight: 500, gf: 'Noto+Serif:wght@100..900' },
+    fbSans: VI_SANS_FB,
+    fbSerif: VI_SERIF_FB,
+    map: {}   // dùng trực tiếp J.FONTS
   };
 
-  // Thêm một số font vào catalogue chính (để chọn được trong UI nếu có)
-  if (J.FONTS) {
-    J.FONTS.be_vietnam = { label: 'Be Vietnam Pro', family: '"Be Vietnam Pro"', weight: 500, kind: 'gothic', fb: '"Be Vietnam Pro",sans-serif', gf: VI_SANS };
-    J.FONTS.inter_vi = { label: 'Inter', family: '"Inter"', weight: 500, kind: 'gothic', fb: '"Inter",sans-serif', gf: VI_SANS2 };
-    J.FONTS.noto_sans_vi = { label: 'Noto Sans', family: '"Noto Sans"', weight: 500, kind: 'gothic', fb: '"Noto Sans",sans-serif', gf: VI_SANS5 };
-    J.FONTS.noto_serif_vi = { label: 'Noto Serif', family: '"Noto Serif"', weight: 500, kind: 'mincho', fb: '"Noto Serif",serif', gf: VI_SERIF };
-  }
-
-  // 6. Pool ký tự cho tiếng Việt (dùng khi scramble / random)
+  // Pool ký tự Việt
   if (J.POOLS) {
     const VI = 'AĂÂBCDĐEÊGHIKLMNOÔƠPQRSTUƯVXYYaăâbcdđeêghiklmnoôơpqrstuưvxyyÀÁẢÃẠẰẮẲẴẶẦẤẨẪẬÈÉẺẼẸỀẾỂỄỆÌÍỈĨỊÒÓỎÕỌỒỐỔỖỘỜỚỞỠỢÙÚỦŨỤỪỨỬỮỰỲÝỶỸỴàáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵ0123456789';
     J.POOLS.vi = {
       kana: VI, hira: VI.toLowerCase(), half: '0123456789ABCDEF',
-      reel: VI + '0123456789', scramble: VI + '★◆▲●■#$%&', signs: VI.slice(0,40) + '#*+=/<>01'
+      reel: VI + '0123456789', scramble: VI + '★◆▲●■#$%&', signs: VI.slice(0, 50) + '#*+=/<>01'
     };
   }
 
-  console.log('[JIZURA-VI] Vietnamese font pack ready. Languages:', J.LANGS);
+  // Variable weight (@var) → dùng Inter + Noto Serif thay Noto JP
+  const _origEnsure = J.ensureFonts;
+  J.ensureFonts = async (text, keys) => {
+    if (keys && keys.includes('@var')) {
+      // load variable Latin fonts thay JP
+      const specs = ['Inter:wght@100..900', 'Noto+Serif:wght@100..900', 'Be+Vietnam+Pro:wght@100;200;300;400;500;600;700;800;900'];
+      for (const s of specs) {
+        try {
+          const l = document.createElement('link');
+          l.rel = 'stylesheet';
+          l.href = 'https://fonts.googleapis.com/css2?family=' + s + '&display=swap';
+          document.head.appendChild(l);
+        } catch(e) {}
+      }
+      // vẫn gọi gốc nhưng đã thay FONTS rồi nên sẽ load đúng
+    }
+    if (_origEnsure) return _origEnsure(text, keys);
+  };
+
+  // faceOf: khi lang=vi thì trả về chính FONTS (đã Việt hóa)
+  const _origFaceOf = J.faceOf;
+  J.faceOf = (key) => {
+    if (J.lang === 'vi' || !J.lang) {
+      return J.FONTS[key] || J.FONTS.gothic_bold;
+    }
+    return _origFaceOf ? _origFaceOf(key) : (J.FONTS[key] || J.FONTS.gothic_bold);
+  };
+
+  console.log('[VI-FONTS] Done. All', Object.keys(J.FONTS).length, 'fonts replaced with Vietnamese versions.');
+  console.log('[VI-FONTS] Primary:', J.FONTS.gothic_bold.label, '+', J.FONTS.mincho.label);
 })();
 </script>
 

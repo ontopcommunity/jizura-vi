@@ -38010,183 +38010,163 @@ function boot() {
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 J.ui = S;
 // hooks for hosts that embed the app (the After Effects CEP panel)
-J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restartPreview, exportRange, exportRangeLines };
+J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restartPreview, exportRange, exportRangeLines, setOv, drawTimeline, renderLines, tlView, tlTime, pushEdit, tlHandleAt, tlDragTo };
 })();
 
 </script>
 
 
 
+
 <script>
 /* ================================================================
-   JIZURA VI — KÉO ĐIỂM CHUYỂN CẢNH GIỮA CÁC CUT (từng từ/đoạn)
-   Dùng đúng cutTime của engine gốc.
-   - Marker dòng (tam giác): như cũ
-   - Biên giữa 2 cut cùng dòng: kéo được → set overrides[line].cutTime
-   Không auto linh tinh. Thủ công như đặt điểm chuyển cảnh.
+   CUT boundary drag — dùng J.ui / J.uiApi (scope gốc)
+   Bật/Tắt được. Kéo vạch vàng = cutTime.
    ================================================================ */
 (() => {
-  if (typeof window === 'undefined') return;
-  console.log('[CUT-DRAG] Manual cut boundary drag on timeline');
+  const api = () => (typeof J !== 'undefined' && J.uiApi) ? J.uiApi : null;
+  const state = () => (typeof J !== 'undefined' && J.ui) ? J.ui : null;
 
-  const CD = { drag: null, hover: null }; // { line, k } k = cut index within line (>=1)
+  const CD = { on: true, drag: null, hover: null };
 
-  function lyricCutsOfLine(lineIdx) {
-    const S = window.S;
+  function lyricCuts(lineIdx) {
+    const S = state();
     if (!S || !S.plan) return [];
     return S.plan.cuts.filter(c => c.line === lineIdx && J.LAYOUTS[c.layout] && !J.LAYOUTS[c.layout].special);
   }
 
-  // Hit-test biên giữa các cut (cạnh trái của cut k>=1)
   function cutEdgeAt(ev) {
-    const S = window.S;
-    if (!S || !S.plan) return null;
+    if (!CD.on) return null;
+    const S = state();
+    const A = api();
+    if (!S || !S.plan || !A || !A.tlView) return null;
     const c = document.getElementById('timeline');
     if (!c) return null;
     const r = c.getBoundingClientRect();
-    let vd, off;
-    try { const v = tlView(); vd = v.vd; off = v.off; } catch (e) { return null; }
-    // vùng giữa timeline (tránh đụng handle dòng ở top)
     const yRatio = (ev.clientY - r.top) / r.height;
     if (yRatio < 0.28) return null;
-
-    let best = null, bd = 9;
-    const linesDone = new Set();
+    let vd, off;
+    try { const v = A.tlView(); vd = v.vd; off = v.off; } catch (e) { return null; }
+    let best = null, bd = 10;
+    const seen = new Set();
     for (const cut of S.plan.cuts) {
-      if (cut.line < 0 || linesDone.has(cut.line)) continue;
-      const cuts = lyricCutsOfLine(cut.line);
+      if (cut.line < 0 || seen.has(cut.line)) continue;
+      const cuts = lyricCuts(cut.line);
       if (cuts.length < 2) continue;
-      linesDone.add(cut.line);
+      seen.add(cut.line);
       for (let k = 1; k < cuts.length; k++) {
         const px = (cuts[k].start - off) / vd * r.width;
         const d = Math.abs(px - (ev.clientX - r.left));
-        if (d < bd) { bd = d; best = { line: cut.line, k, cut: cuts[k], prev: cuts[k-1], next: cuts[k+1] || null }; }
+        if (d < bd) { bd = d; best = { line: cut.line, k }; }
       }
     }
     return best;
   }
 
-  function drawCutEdges() {
-    const S = window.S;
-    if (!S || !S.plan) return;
+  function drawEdges() {
+    if (!CD.on) return;
+    const S = state();
+    const A = api();
+    if (!S || !S.plan || !A || !A.tlView) return;
     const c = document.getElementById('timeline');
-    if (!c) return;
-    let vd, off, D;
-    try { const v = tlView(); vd = v.vd; off = v.off; D = v.D; } catch (e) { return; }
+    if (!c || !c.width) return;
+    let vd, off;
+    try { const v = A.tlView(); vd = v.vd; off = v.off; } catch (e) { return; }
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const w = c.width, h = c.height;
     const x = c.getContext('2d');
     const X = t => (t - off) / vd * w;
     const top = h * 0.3, bot = h - 8 * dpr;
-
-    const linesDone = new Set();
+    const seen = new Set();
     for (const cut of S.plan.cuts) {
-      if (cut.line < 0 || linesDone.has(cut.line)) continue;
-      const cuts = lyricCutsOfLine(cut.line);
+      if (cut.line < 0 || seen.has(cut.line)) continue;
+      const cuts = lyricCuts(cut.line);
       if (cuts.length < 2) continue;
-      linesDone.add(cut.line);
+      seen.add(cut.line);
       for (let k = 1; k < cuts.length; k++) {
         const lx = X(cuts[k].start);
         if (lx < -20 || lx > w + 20) continue;
         const isOn = CD.drag && CD.drag.line === cut.line && CD.drag.k === k;
         const isHv = CD.hover && CD.hover.line === cut.line && CD.hover.k === k;
-        // vạch biên dày, màu vàng/cam — giống điểm chuyển cảnh
-        x.fillStyle = isOn ? '#fbbf24' : isHv ? '#f59e0b' : 'rgba(251,191,36,0.85)';
+        x.fillStyle = isOn ? '#fbbf24' : isHv ? '#f59e0b' : 'rgba(251,191,36,0.9)';
         x.fillRect(lx - (isOn || isHv ? 2*dpr : 1.2*dpr), top, isOn || isHv ? 4*dpr : 2.4*dpr, bot - top);
-        // tay nắm nhỏ giữa
-        x.beginPath();
-        x.moveTo(lx - 5*dpr, (top+bot)/2 - 6*dpr);
-        x.lineTo(lx + 5*dpr, (top+bot)/2 - 6*dpr);
-        x.lineTo(lx + 5*dpr, (top+bot)/2 + 6*dpr);
-        x.lineTo(lx - 5*dpr, (top+bot)/2 + 6*dpr);
-        x.closePath();
         x.fillStyle = isOn ? '#fef3c7' : '#fbbf24';
-        x.fill();
-        x.strokeStyle = 'rgba(0,0,0,0.5)';
-        x.lineWidth = 1;
-        x.stroke();
+        x.fillRect(lx - 5*dpr, (top+bot)/2 - 5*dpr, 10*dpr, 10*dpr);
       }
     }
   }
 
-  function applyCutTime(line, k, absTime) {
-    const S = window.S;
-    if (!S || !S.plan) return;
+  function setCutTime(line, k, absT) {
+    const S = state();
+    const A = api();
+    if (!S || !S.plan || !A) return;
     const ln = S.plan.lines[line];
     if (!ln) return;
-    const cuts = lyricCutsOfLine(line);
+    const cuts = lyricCuts(line);
     if (k < 1 || k >= cuts.length) return;
-
-    // relative to line start (đúng format cutTime gốc)
-    let rel = absTime - ln.start;
-    // clamp giữa cut trước và sau
-    const minRel = (k >= 1 ? (cuts[k-1].start - ln.start) : 0) + 0.22;
-    const maxRel = (k + 1 < cuts.length ? (cuts[k+1].start - ln.start) : (ln.end - ln.start)) - 0.22;
-    rel = Math.max(minRel, Math.min(maxRel, rel));
+    let rel = absT - ln.start;
+    const minRel = 0.22 * k;
+    const maxRel = (ln.end - ln.start) - 0.22 * (cuts.length - k);
+    const prevAbs = cuts[k - 1].start;
+    const nextAbs = k + 1 < cuts.length ? cuts[k + 1].start : ln.end;
+    rel = Math.max(prevAbs - ln.start + 0.2, Math.min(nextAbs - ln.start - 0.2, rel));
     rel = +rel.toFixed(3);
-
-    if (typeof window.pushEdit === 'function') window.pushEdit();
-    if (typeof window.setOv === 'function') {
+    if (A.pushEdit) A.pushEdit();
+    if (A.setOv) {
       const cur = (S.project.overrides && S.project.overrides[line]) || {};
       const ct = Object.assign({}, cur.cutTime || {});
       ct[k] = rel;
-      window.setOv(line, { cutTime: ct });
-    } else {
-      if (!S.project.overrides) S.project.overrides = {};
-      if (!S.project.overrides[line]) S.project.overrides[line] = {};
-      if (!S.project.overrides[line].cutTime) S.project.overrides[line].cutTime = {};
-      S.project.overrides[line].cutTime[k] = rel;
+      A.setOv(line, { cutTime: ct });
     }
   }
 
   function hookDraw() {
-    if (typeof window.drawTimeline !== 'function' || window.drawTimeline.__cutDragHooked) return !!window.drawTimeline;
-    const orig = window.drawTimeline;
-    window.drawTimeline = function () {
+    const A = api();
+    if (!A || !A.drawTimeline || A.drawTimeline.__cd) return false;
+    const orig = A.drawTimeline;
+    A.drawTimeline = function () {
       const r = orig.apply(this, arguments);
-      try { drawCutEdges(); } catch (e) {}
+      try { drawEdges(); } catch (e) {}
       return r;
     };
-    window.drawTimeline.__cutDragHooked = true;
+    A.drawTimeline.__cd = true;
+    // also put on window for any other callers
+    window.drawTimeline = A.drawTimeline;
     return true;
   }
 
   function hookPointer() {
     const tl = document.getElementById('timeline');
-    if (!tl || tl.__cutDragHooked) return !!tl;
-    tl.__cutDragHooked = true;
+    if (!tl || tl.__cdHook) return !!tl;
+    tl.__cdHook = true;
+    const A = api;
 
     tl.addEventListener('pointerdown', (e) => {
-      const S = window.S;
+      if (!CD.on) return;
+      const S = state();
       if (!S || S.tap || S.exporting) return;
-      // Không bắt nếu đang bắt handle dòng (top)
-      try {
-        if (typeof tlHandleAt === 'function' && tlHandleAt(e) >= 0) {
-          // nếu pointer ở top band thì để gốc xử lý dòng
-          const r = tl.getBoundingClientRect();
-          if ((e.clientY - r.top) / r.height < 0.35) return;
-        }
-      } catch (err) {}
       const edge = cutEdgeAt(e);
       if (!edge) return;
       e.preventDefault();
       e.stopPropagation();
-      if (typeof window.pushEdit === 'function') window.pushEdit();
-      if (typeof window.pause === 'function') window.pause();
+      const AP = api();
+      if (AP && AP.pushEdit) AP.pushEdit();
+      if (AP && AP.pause) AP.pause();
       CD.drag = edge;
       tl.style.cursor = 'ew-resize';
       try { tl.setPointerCapture(e.pointerId); } catch (err) {}
     }, true);
 
     tl.addEventListener('pointermove', (e) => {
+      if (!CD.on) return;
+      const AP = api();
       if (CD.drag) {
         e.preventDefault();
         e.stopPropagation();
         let t;
-        try { t = tlTime(e); } catch (err) { return; }
-        // snap beat trừ Shift
-        const S = window.S;
-        if (!e.shiftKey && S.plan && S.plan.beats && S.plan.beats.length) {
+        try { t = AP.tlTime(e); } catch (err) { return; }
+        const S = state();
+        if (!e.shiftKey && S && S.plan && S.plan.beats) {
           let bt = null, bd = 0.1;
           for (const b of S.plan.beats) {
             const d = Math.abs(b - t);
@@ -38195,96 +38175,116 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
           }
           if (bt != null) t = bt;
         }
-        applyCutTime(CD.drag.line, CD.drag.k, t);
-        // replan nhẹ khi kéo
-        if (typeof window.replan === 'function') window.replan();
-        if (typeof window.drawTimeline === 'function') window.drawTimeline();
-        if (typeof window.seek === 'function') window.seek(t + 0.001);
+        setCutTime(CD.drag.line, CD.drag.k, t);
+        if (AP.replan) AP.replan();
+        if (AP.drawTimeline) AP.drawTimeline();
+        if (AP.seek) AP.seek(t + 0.001);
         return;
       }
       const hv = cutEdgeAt(e);
       const same = hv && CD.hover && hv.line === CD.hover.line && hv.k === CD.hover.k;
       if (!same) {
         CD.hover = hv;
-        tl.style.cursor = hv ? 'ew-resize' : '';
-        if (typeof window.drawTimeline === 'function') window.drawTimeline();
+        if (hv) tl.style.cursor = 'ew-resize';
+        else if (!CD.drag) tl.style.cursor = '';
+        if (AP && AP.drawTimeline) AP.drawTimeline();
       }
     }, true);
 
-    const endDrag = () => {
+    const end = () => {
       if (!CD.drag) return;
       CD.drag = null;
-      if (typeof window.replan === 'function') window.replan();
-      if (typeof window.flushSave === 'function') window.flushSave();
-      if (typeof window.renderLines === 'function') window.renderLines();
-      if (typeof window.drawTimeline === 'function') window.drawTimeline();
+      const AP = api();
+      if (AP) {
+        if (AP.replan) AP.replan();
+        if (AP.flushSave) AP.flushSave();
+        if (AP.renderLines) AP.renderLines();
+        if (AP.drawTimeline) AP.drawTimeline();
+      }
     };
-    tl.addEventListener('pointerup', endDrag, true);
-    tl.addEventListener('pointercancel', endDrag, true);
+    tl.addEventListener('pointerup', end, true);
+    tl.addEventListener('pointercancel', end, true);
     return true;
   }
 
-  // Nút nhỏ: tách dòng hiện tại thành N cut = số từ (để có biên kéo)
-  function splitCurrentLineToWords() {
-    const S = window.S;
-    if (!S || !S.plan) return alert('Chưa có plan');
-    // lấy dòng đang phát
+  function status(msg) {
+    const el = document.getElementById('jzCdStatus');
+    if (el) el.textContent = msg;
+  }
+
+  function splitLineToCuts() {
+    const S = state();
+    const A = api();
+    if (!S) { status('App chưa sẵn sàng'); return; }
+    if (!S.plan || !S.plan.lines || !S.plan.lines.length) {
+      status('Chưa có timeline — dán lời + upload nhạc trước');
+      return;
+    }
     let li = -1;
-    if (S.plan.lines) {
-      for (const ln of S.plan.lines) {
-        if (S.t >= ln.start && S.t < ln.end) { li = ln.index; break; }
-      }
+    for (const ln of S.plan.lines) {
+      if (S.t >= ln.start && S.t < (ln.end || ln.start + 1)) { li = ln.index; break; }
     }
     if (li < 0 && S.curLine >= 0) li = S.curLine;
     if (li < 0) li = 0;
     const ln = S.plan.lines[li];
-    if (!ln || ln.interlude) return alert('Dòng không hợp lệ');
+    if (!ln || ln.interlude) { status('Dòng không hợp lệ / interlude'); return; }
     const text = (ln.text || '').trim();
-    const words = text.split(/\s+/).filter(Boolean);
-    // CJK: mỗi cụm ngắn
-    let n = words.length;
-    if (n <= 1 && text.length > 1 && /[\u3400-\u9fff\uac00-\ud7af\u3040-\u30ff]/.test(text)) {
-      n = Math.min(6, Math.max(2, Math.ceil(text.length / 2)));
-    }
-    n = Math.max(2, Math.min(8, n));
-    if (typeof window.setOv === 'function') {
-      window.setOv(li, { cuts: n });
-    } else {
+    let n = text.split(/\s+/).filter(Boolean).length;
+    if (n <= 1 && text.length > 2) n = Math.min(6, Math.max(2, Math.ceil([...text].length / 3)));
+    n = Math.max(2, Math.min(8, n || 2));
+    if (A && A.setOv) A.setOv(li, { cuts: n });
+    else {
       if (!S.project.overrides) S.project.overrides = {};
       if (!S.project.overrides[li]) S.project.overrides[li] = {};
       S.project.overrides[li].cuts = n;
     }
-    if (typeof window.replan === 'function') window.replan();
-    if (typeof window.drawTimeline === 'function') window.drawTimeline();
-    alert('Dòng ' + (li+1) + ' → ' + n + ' cut. Kéo vạch VÀNG trên timeline để chỉnh điểm chuyển cảnh từng đoạn.');
+    if (A && A.replan) A.replan();
+    if (A && A.drawTimeline) A.drawTimeline();
+    status('Dòng ' + (li + 1) + ' → ' + n + ' cut. Kéo vạch VÀNG giữa các khối trên timeline.');
   }
 
-  function addHelpBar() {
+  function buildBar() {
     if (document.getElementById('jzCutDragBar')) return;
     const bar = document.createElement('div');
     bar.id = 'jzCutDragBar';
-    bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px;margin:6px 0;background:#1a1a22;border:1px solid #333;border-radius:8px;font-size:12px;color:#ddd';
+    bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 10px;margin:6px 0;background:#1a1a22;border:1px solid #444;border-radius:8px;font-size:12px;color:#ddd;z-index:99990';
     bar.innerHTML = `
-      <span style="font-weight:700;color:#fbbf24">◆ Điểm chuyển cảnh cut</span>
-      <span style="opacity:.85">Kéo vạch <b style="color:#fbbf24">vàng</b> giữa các khối trên timeline = chỉnh cutTime (từng từ/đoạn). Marker dòng (tam giác trên) vẫn như cũ.</span>
-      <button type="button" id="jzSplitWords" style="padding:6px 12px;border-radius:6px;border:none;background:#f59e0b;color:#111;font-weight:700;cursor:pointer">Tách dòng đang phát → nhiều cut</button>
+      <button type="button" id="jzCdToggle" style="padding:6px 12px;border-radius:6px;border:none;font-weight:700;cursor:pointer;background:#22c55e;color:#111">Vạch cut: BẬT</button>
+      <button type="button" id="jzCdSplit" style="padding:6px 12px;border-radius:6px;border:none;font-weight:700;cursor:pointer;background:#f59e0b;color:#111">Tách dòng đang phát → cut</button>
+      <span id="jzCdStatus" style="opacity:.9;flex:1;min-width:140px">Kéo vạch vàng giữa các khối = điểm chuyển cảnh cut. Tắt nếu vướng.</span>
     `;
-    const anchor = document.getElementById('timeline');
-    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(bar, anchor);
+    const tl = document.getElementById('timeline');
+    if (tl && tl.parentNode) tl.parentNode.insertBefore(bar, tl);
     else document.body.appendChild(bar);
-    bar.querySelector('#jzSplitWords').onclick = splitCurrentLineToWords;
+
+    bar.querySelector('#jzCdToggle').onclick = function () {
+      CD.on = !CD.on;
+      this.textContent = CD.on ? 'Vạch cut: BẬT' : 'Vạch cut: TẮT';
+      this.style.background = CD.on ? '#22c55e' : '#6b7280';
+      status(CD.on ? 'Đã BẬT vạch kéo cut' : 'Đã TẮT — không vướng timeline');
+      const A = api();
+      if (A && A.drawTimeline) A.drawTimeline();
+    };
+    bar.querySelector('#jzCdSplit').onclick = splitLineToCuts;
   }
 
   function boot() {
+    if (!api() || !state()) {
+      setTimeout(boot, 400);
+      return;
+    }
     hookDraw();
     hookPointer();
-    addHelpBar();
-    setTimeout(() => { hookDraw(); hookPointer(); addHelpBar(); }, 600);
-    setTimeout(() => { hookDraw(); hookPointer(); }, 2000);
-    setTimeout(() => { hookDraw(); hookPointer(); }, 4000);
+    buildBar();
+    const A = api();
+    if (A && A.drawTimeline) A.drawTimeline();
+    status('Sẵn sàng. Có nhiều cut trên dòng → kéo vạch vàng. Hoặc bấm Tách dòng.');
   }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
-  else boot();
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(boot, 300));
+  else setTimeout(boot, 300);
+  setTimeout(boot, 1500);
+  setTimeout(boot, 3000);
 })();
 </script>
 

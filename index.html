@@ -38019,12 +38019,13 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
 
 
 
+
 <script>
 /* ================================================================
-   CHẠM TỪNG TỪ = đặt điểm chuyển cảnh theo âm thanh
-   Giống tap dòng gốc, nhưng từng TỪ trong dòng.
-   1) Tách dòng thành N cut = số từ
-   2) Phát nhạc → mỗi lần CHẠM = từ đó bắt đầu (ghi cutTime)
+   CHẠM TỪ — liên tục cả bài, nhẹ máy lúc đang chạm
+   - Không dừng hết dòng
+   - Trong lúc chạm: chỉ ghi thời gian, KHÔNG replan mỗi nhịp (tránh lag)
+   - Đóng / xong: replan 1 lần → website bình thường
    ================================================================ */
 (() => {
   const api = () => (J && J.uiApi) ? J.uiApi : null;
@@ -38032,18 +38033,20 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
 
   const WT = {
     active: false,
-    line: -1,
-    word: 0,      // index từ đang chờ chạm (0 = đầu dòng)
-    words: [],    // string[]
-    done: [],     // undo stack
+    // flat queue: [{ line, wordIdx, text, isFirstOfLine }]
+    queue: [],
+    qi: 0,
+    done: [],
+    // pending writes — flush on stop
+    lineTimes: {},
+    cutTimes: {}, // line -> { k: rel }
+    cutsN: {},    // line -> n
   };
 
   function splitWords(text) {
     const t = String(text || '').trim();
     if (!t) return [];
-    // có khoảng trắng → tách theo space
     if (/\s/.test(t)) return t.split(/\s+/).filter(Boolean);
-    // CJK / không space → tách từng ký tự hoặc cụm 2
     const chars = [...t];
     if (chars.length <= 8) return chars;
     const out = [];
@@ -38051,23 +38054,21 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
     return out;
   }
 
-  function ensureWordCuts(lineIdx) {
+  function buildQueue(fromLine) {
     const S = st();
-    const A = api();
-    if (!S || !S.plan) return null;
-    const ln = S.plan.lines[lineIdx];
-    if (!ln || ln.interlude) return null;
-    const words = splitWords(ln.text || '');
-    if (words.length < 1) return null;
-    const n = Math.min(12, Math.max(1, words.length));
-    if (A && A.setOv) A.setOv(lineIdx, { cuts: n });
-    else {
-      if (!S.project.overrides) S.project.overrides = {};
-      if (!S.project.overrides[lineIdx]) S.project.overrides[lineIdx] = {};
-      S.project.overrides[lineIdx].cuts = n;
+    if (!S || !S.plan || !S.plan.lines) return [];
+    const q = [];
+    for (let li = fromLine; li < S.plan.lines.length; li++) {
+      const ln = S.plan.lines[li];
+      if (!ln || ln.interlude) continue;
+      const words = splitWords(ln.text || '');
+      if (!words.length) continue;
+      const n = Math.min(12, words.length);
+      for (let w = 0; w < n; w++) {
+        q.push({ line: li, wordIdx: w, text: words[w], isFirst: w === 0, nWords: n });
+      }
     }
-    if (A && A.replan) A.replan();
-    return words.slice(0, n);
+    return q;
   }
 
   function panelEl() {
@@ -38076,26 +38077,23 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
     p = document.createElement('div');
     p.id = 'jzWordTapPanel';
     p.hidden = true;
-    p.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:24px;z-index:100000;width:min(440px,94vw);background:#12121a;border:2px solid #f59e0b;border-radius:14px;padding:14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.6);color:#eee;font-family:system-ui,sans-serif';
+    p.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:20px;z-index:100000;width:min(420px,94vw);background:#12121a;border:2px solid #f59e0b;border-radius:14px;padding:12px 14px;box-shadow:0 12px 40px rgba(0,0,0,.55);color:#eee;font-family:system-ui,sans-serif;will-change:transform';
     p.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <strong style="color:#fbbf24;font-size:15px">Chạm từng từ theo nhạc</strong>
-        <button type="button" id="jzWtClose" style="padding:4px 10px;border-radius:6px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Đóng</button>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px">
+        <strong style="color:#fbbf24;font-size:14px">Chạm từ · liên tục</strong>
+        <button type="button" id="jzWtClose" style="padding:4px 10px;border-radius:6px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Xong</button>
       </div>
-      <div id="jzWtLine" style="font-size:12px;opacity:.75;margin-bottom:6px">—</div>
-      <div id="jzWtWord" style="font-size:28px;font-weight:800;text-align:center;padding:12px 8px;color:#fbbf24;min-height:48px">—</div>
-      <div id="jzWtNext" style="font-size:12px;opacity:.6;text-align:center;margin-bottom:10px">—</div>
-      <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
-        <button type="button" id="jzWtTap" style="flex:1;min-width:140px;padding:16px 12px;border:none;border-radius:10px;background:linear-gradient(135deg,#f59e0b,#ea580c);color:#111;font-size:18px;font-weight:800;cursor:pointer">CHẠM</button>
-        <button type="button" id="jzWtBack" style="padding:12px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">↩ Lùi</button>
+      <div id="jzWtMeta" style="font-size:11px;opacity:.7;margin-bottom:4px">—</div>
+      <div id="jzWtWord" style="font-size:26px;font-weight:800;text-align:center;padding:10px 6px;color:#fbbf24;min-height:42px">—</div>
+      <div id="jzWtNext" style="font-size:12px;opacity:.55;text-align:center;margin-bottom:8px">—</div>
+      <div style="display:flex;gap:8px">
+        <button type="button" id="jzWtTap" style="flex:1;padding:14px;border:none;border-radius:10px;background:linear-gradient(135deg,#f59e0b,#ea580c);color:#111;font-size:17px;font-weight:800;cursor:pointer">CHẠM</button>
+        <button type="button" id="jzWtBack" style="padding:12px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">↩</button>
       </div>
-      <div style="font-size:11px;opacity:.65;margin-top:10px;line-height:1.4">
-        Phát nhạc → mỗi lần <b>CHẠM</b> (hoặc phím <b>Space</b>) = từ đó bắt đầu đúng lúc đó.<br>
-        Giống đặt điểm chuyển cảnh, nhưng cho từng từ trong dòng.
-      </div>
+      <div style="font-size:10px;opacity:.55;margin-top:8px">Space = chạm · Esc = xong · Không replan giữa chừng → mượt</div>
     `;
     document.body.appendChild(p);
-    p.querySelector('#jzWtClose').onclick = stopWordTap;
+    p.querySelector('#jzWtClose').onclick = () => stopWordTap(true);
     p.querySelector('#jzWtTap').onclick = () => wordTapNow();
     p.querySelector('#jzWtBack').onclick = () => wordTapBack();
     return p;
@@ -38105,204 +38103,188 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
     const p = panelEl();
     if (!WT.active) { p.hidden = true; return; }
     p.hidden = false;
-    const S = st();
-    const ln = S && S.plan && S.plan.lines[WT.line];
-    p.querySelector('#jzWtLine').textContent =
-      'Dòng ' + (WT.line + 1) + (ln ? ': ' + (ln.text || '').slice(0, 50) : '') +
-      '  ·  từ ' + (WT.word + 1) + '/' + WT.words.length;
-    const cur = WT.words[WT.word];
-    const nxt = WT.words[WT.word + 1];
-    p.querySelector('#jzWtWord').textContent = cur != null ? cur : '✓ Hết dòng';
-    p.querySelector('#jzWtNext').textContent = nxt != null ? ('Tiếp: ' + nxt) : (cur != null ? 'Từ cuối dòng' : 'Chạm để sang dòng sau / đóng');
+    const item = WT.queue[WT.qi];
+    const left = WT.queue.length - WT.qi;
+    if (!item) {
+      p.querySelector('#jzWtMeta').textContent = 'Hết bài';
+      p.querySelector('#jzWtWord').textContent = '✓ Xong';
+      p.querySelector('#jzWtNext').textContent = 'Bấm Xong để áp dụng';
+      return;
+    }
+    p.querySelector('#jzWtMeta').textContent =
+      'Dòng ' + (item.line + 1) + ' · từ ' + (item.wordIdx + 1) + '/' + item.nWords + ' · còn ' + left + ' điểm';
+    p.querySelector('#jzWtWord').textContent = item.text;
+    const nxt = WT.queue[WT.qi + 1];
+    p.querySelector('#jzWtNext').textContent = nxt ? ('Tiếp: ' + nxt.text + (nxt.line !== item.line ? ' (dòng ' + (nxt.line + 1) + ')' : '')) : 'Từ cuối';
   }
 
-  function startWordTap(fromLine) {
+  function startWordTap() {
     const S = st();
     const A = api();
     if (!S || !S.plan || !S.plan.lines || !S.plan.lines.length) {
-      alert('Cần dán lời + upload nhạc trước (có timeline).');
+      alert('Dán lời + upload nhạc trước.');
       return;
     }
-    if (!S.audio) {
-      alert('Upload file nhạc trước.');
-      return;
-    }
-    let li = fromLine;
-    if (li == null || li < 0) {
-      li = 0;
-      for (const ln of S.plan.lines) {
-        if (S.t >= ln.start && S.t < (ln.end || ln.start + 99)) { li = ln.index; break; }
-      }
-    }
-    li = Math.max(0, Math.min(S.plan.lines.length - 1, li));
-    // bỏ interlude
-    while (li < S.plan.lines.length && S.plan.lines[li].interlude) li++;
-    if (li >= S.plan.lines.length) { alert('Hết dòng.'); return; }
+    if (!S.audio) { alert('Upload nhạc trước.'); return; }
 
-    const words = ensureWordCuts(li);
-    if (!words || !words.length) { alert('Dòng này không tách được từ.'); return; }
+    let from = 0;
+    for (const ln of S.plan.lines) {
+      if (S.t >= ln.start && S.t < (ln.end || ln.start + 99)) { from = ln.index; break; }
+    }
+
+    const queue = buildQueue(from);
+    if (!queue.length) { alert('Không có từ để chạm.'); return; }
 
     WT.active = true;
-    WT.line = li;
-    WT.word = 0;
-    WT.words = words;
+    WT.queue = queue;
+    WT.qi = 0;
     WT.done = [];
+    WT.lineTimes = {};
+    WT.cutTimes = {};
+    WT.cutsN = {};
 
-    // seek trước dòng một chút
-    const ln = S.plan.lines[li];
-    const t0 = Math.max(0, (ln.start || 0) - 1.2);
+    // pre-set cuts count in memory only (apply on flush)
+    for (const it of queue) {
+      WT.cutsN[it.line] = it.nWords;
+    }
+
+    const first = queue[0];
+    const ln = S.plan.lines[first.line];
+    const t0 = Math.max(0, (ln && ln.start || 0) - 0.8);
     if (A && A.pause) A.pause();
     if (A && A.seek) A.seek(t0);
     updatePanel();
-    setTimeout(() => { if (A && A.play) A.play(); }, 200);
-    setTimeout(() => {
-      // play if available
-      try {
-        const btn = document.querySelector('[aria-label*="再生"], [aria-label*="Play"], .play, #btnPlay, button.play');
-        // use internal play via clicking transport if needed
-        if (S && !S.playing) {
-          const playBtn = document.querySelector('button[title*="再生"], button[title*="Play"], .transport button');
-          // seek already done; user can hit play — or try space
-        }
-      } catch (e) {}
-    }, 100);
-    // focus
-    const p = panelEl();
-    p.querySelector('#jzWtTap').focus();
+    setTimeout(() => { if (A && A.play) A.play(); }, 150);
+    panelEl().querySelector('#jzWtTap').focus();
   }
 
   function wordTapNow() {
     if (!WT.active) return;
     const S = st();
-    const A = api();
-    if (!S || !S.plan) return;
-    const t = +S.t.toFixed(3);
-    const li = WT.line;
-    const ln = S.plan.lines[li];
-    if (!ln) return;
-
-    if (WT.word >= WT.words.length) {
-      // sang dòng sau
-      const next = li + 1;
-      if (next < S.plan.lines.length) startWordTap(next);
-      else stopWordTap();
+    if (!S) return;
+    const item = WT.queue[WT.qi];
+    if (!item) {
+      stopWordTap(true);
       return;
     }
+    const t = +S.t.toFixed(3);
 
-    if (A && A.pushEdit) A.pushEdit();
-
-    if (WT.word === 0) {
-      // từ đầu = lineTimes
-      if (!S.project.timing) S.project.timing = {};
-      if (!S.project.timing.lineTimes) S.project.timing.lineTimes = {};
-      const had = S.project.timing.lineTimes[li];
-      WT.done.push({ type: 'line', li, had });
-      S.project.timing.lineTimes[li] = t;
-      // xóa lineTimes sau nếu lệch
-      for (const k of Object.keys(S.project.timing.lineTimes)) {
-        if (+k > li && S.project.timing.lineTimes[k] <= t + 0.15)
-          delete S.project.timing.lineTimes[k];
-      }
+    if (item.isFirst) {
+      WT.done.push({ type: 'line', li: item.line, had: WT.lineTimes[item.line], qi: WT.qi });
+      WT.lineTimes[item.line] = t;
     } else {
-      // từ 2+ = cutTime[k] relative to line start
-      // sau replan, line start có thể đổi — dùng t - lineTimes[li]
-      const lineStart = (S.project.timing.lineTimes && S.project.timing.lineTimes[li] != null)
-        ? +S.project.timing.lineTimes[li]
-        : ln.start;
+      // relative: cần line start đã chạm
+      const lineStart = WT.lineTimes[item.line] != null
+        ? WT.lineTimes[item.line]
+        : (S.plan.lines[item.line] && S.plan.lines[item.line].start) || 0;
       const rel = +Math.max(0, t - lineStart).toFixed(3);
-      const k = WT.word; // cut index
-      const cur = (S.project.overrides && S.project.overrides[li]) || {};
-      const ct = Object.assign({}, cur.cutTime || {});
-      const had = ct[k];
-      WT.done.push({ type: 'cut', li, k, had });
-      ct[k] = rel;
-      if (A && A.setOv) A.setOv(li, { cutTime: ct, cuts: WT.words.length });
-      else {
-        if (!S.project.overrides) S.project.overrides = {};
-        if (!S.project.overrides[li]) S.project.overrides[li] = {};
-        S.project.overrides[li].cutTime = ct;
-        S.project.overrides[li].cuts = WT.words.length;
-      }
+      if (!WT.cutTimes[item.line]) WT.cutTimes[item.line] = {};
+      const had = WT.cutTimes[item.line][item.wordIdx];
+      WT.done.push({ type: 'cut', li: item.line, k: item.wordIdx, had, qi: WT.qi });
+      WT.cutTimes[item.line][item.wordIdx] = rel;
     }
 
-    WT.word++;
-    if (A && A.replan) A.replan();
-    if (A && A.drawTimeline) A.drawTimeline();
+    WT.qi++;
+    // CHỈ cập nhật chữ trên panel — không replan, không vẽ timeline
     updatePanel();
 
-    if (WT.word >= WT.words.length) {
-      // tự sang dòng sau sau 0.4s hoặc chờ chạm
-      // keep panel showing "hết dòng"
+    if (WT.qi >= WT.queue.length) {
+      // hết bài — chờ bấm Xong
     }
   }
 
   function wordTapBack() {
     if (!WT.active || !WT.done.length) return;
-    const S = st();
-    const A = api();
     const d = WT.done.pop();
+    WT.qi = d.qi;
     if (d.type === 'line') {
-      if (d.had != null) S.project.timing.lineTimes[d.li] = d.had;
-      else if (S.project.timing.lineTimes) delete S.project.timing.lineTimes[d.li];
-      WT.word = 0;
-      WT.line = d.li;
-    } else if (d.type === 'cut') {
-      const cur = (S.project.overrides && S.project.overrides[d.li]) || {};
-      const ct = Object.assign({}, cur.cutTime || {});
-      if (d.had != null) ct[d.k] = d.had;
-      else delete ct[d.k];
-      if (A && A.setOv) A.setOv(d.li, { cutTime: Object.keys(ct).length ? ct : undefined });
-      WT.word = d.k;
-      WT.line = d.li;
+      if (d.had != null) WT.lineTimes[d.li] = d.had;
+      else delete WT.lineTimes[d.li];
+    } else {
+      if (!WT.cutTimes[d.li]) WT.cutTimes[d.li] = {};
+      if (d.had != null) WT.cutTimes[d.li][d.k] = d.had;
+      else delete WT.cutTimes[d.li][d.k];
     }
-    // restore words for that line
-    const ln = S.plan.lines[WT.line];
-    WT.words = splitWords(ln && ln.text || '');
-    if (A && A.replan) A.replan();
-    if (A && A.seek) A.seek(Math.max(0, S.t - 2));
     updatePanel();
   }
 
-  function stopWordTap() {
+  function flushToProject() {
+    const S = st();
+    const A = api();
+    if (!S || !S.project) return;
+    if (!S.project.timing) S.project.timing = {};
+    if (!S.project.timing.lineTimes) S.project.timing.lineTimes = {};
+    if (!S.project.overrides) S.project.overrides = {};
+
+    for (const li of Object.keys(WT.lineTimes)) {
+      S.project.timing.lineTimes[li] = WT.lineTimes[li];
+    }
+    for (const li of Object.keys(WT.cutsN)) {
+      const n = WT.cutsN[li];
+      const ct = WT.cutTimes[li] || {};
+      if (A && A.setOv) {
+        A.setOv(+li, {
+          cuts: n,
+          cutTime: Object.keys(ct).length ? ct : undefined
+        });
+      } else {
+        if (!S.project.overrides[li]) S.project.overrides[li] = {};
+        S.project.overrides[li].cuts = n;
+        if (Object.keys(ct).length) S.project.overrides[li].cutTime = ct;
+      }
+    }
+  }
+
+  function stopWordTap(apply) {
     WT.active = false;
     const p = document.getElementById('jzWordTapPanel');
     if (p) p.hidden = true;
     const A = api();
-    if (A && A.flushSave) A.flushSave();
-    if (A && A.replan) A.replan();
+    if (apply) {
+      flushToProject();
+      // replan MỘT LẦN khi xong → timeline + video đúng
+      if (A && A.replan) A.replan();
+      if (A && A.drawTimeline) A.drawTimeline();
+      if (A && A.renderLines) A.renderLines();
+      if (A && A.flushSave) A.flushSave();
+    }
+    WT.queue = [];
+    WT.qi = 0;
+    WT.done = [];
   }
 
-  // Space = chạm khi panel mở
   document.addEventListener('keydown', (e) => {
     if (!WT.active) return;
     if (e.code === 'Space' || e.key === ' ') {
       e.preventDefault();
+      e.stopPropagation();
       wordTapNow();
-    }
-    if (e.key === 'Backspace' && !/INPUT|TEXTAREA/.test((e.target || {}).tagName || '')) {
+    } else if (e.key === 'Backspace' && !/INPUT|TEXTAREA|SELECT/.test((e.target && e.target.tagName) || '')) {
       e.preventDefault();
       wordTapBack();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      stopWordTap(true);
     }
-    if (e.key === 'Escape') stopWordTap();
-  });
+  }, true);
 
   function buildBar() {
     if (document.getElementById('jzWordTapBar')) return;
     const bar = document.createElement('div');
     bar.id = 'jzWordTapBar';
-    bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px;margin:8px 0;background:#1a1520;border:2px solid #f59e0b;border-radius:10px;z-index:99990';
+    bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px;margin:8px 0;background:#1a1520;border:2px solid #f59e0b;border-radius:10px';
     bar.innerHTML = `
       <button type="button" id="jzWtStart" style="padding:12px 18px;border:none;border-radius:8px;background:linear-gradient(135deg,#f59e0b,#ea580c);color:#111;font-weight:800;font-size:15px;cursor:pointer">
         ⏱ Chạm từng từ theo nhạc
       </button>
-      <span style="font-size:12px;color:#ddd;max-width:320px;line-height:1.35">
-        Bật nhạc → bấm nút → mỗi lần <b>CHẠM</b> / phím <b>Space</b> đặt điểm bắt đầu <b>một từ</b> (giống điểm chuyển cảnh).
+      <span style="font-size:12px;color:#ccc;max-width:340px;line-height:1.35">
+        Chạm liên tục cả bài (Space). Lúc chạm không lag. Bấm <b>Xong</b> mới áp dụng vào timeline.
       </span>
     `;
     const tl = document.getElementById('timeline');
     if (tl && tl.parentNode) tl.parentNode.insertBefore(bar, tl);
     else document.body.appendChild(bar);
-    bar.querySelector('#jzWtStart').onclick = () => startWordTap(null);
+    bar.querySelector('#jzWtStart').onclick = () => startWordTap();
   }
 
   function boot() {

@@ -38161,16 +38161,19 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
 
 
 
+
 <script>
 /* ================================================================
-   JIZURA VI — AUTO ALIGN: DÒNG + TỪ (mọi ngôn ngữ)
-   Nút ⚡ Tự căn dòng  |  Nút 🔤 Tự căn theo từ
-   Giữ nguyên chỉnh tay (tap / kéo / nhập giây)
+   JIZURA VI — CĂN DÒNG + CĂN TỪ (AUTO + THỦ CÔNG)
+   - Auto: ⚡ dòng | 🔤 từ
+   - Thủ công từ: panel chỉnh từng từ trong dòng (giống lineTimes)
+   Giữ nguyên cấu trúc dòng lời + timeline gốc.
    ================================================================ */
 (() => {
   if (typeof J === 'undefined') return;
-  console.log('[AUTO-ALIGN] Line + Word level installing...');
+  console.log('[WORD-TIMING] Manual + Auto word timing installing...');
 
+  // ---------- shared helpers ----------
   function splitWords(text) {
     const t = String(text || '').trim();
     if (!t) return [];
@@ -38179,7 +38182,6 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
     }
     return t.split(/(\s+)/).filter(w => w.trim().length > 0);
   }
-
   function wordWeight(w) {
     let score = 0;
     for (const c of w) {
@@ -38192,7 +38194,6 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
     }
     return Math.max(0.6, score);
   }
-
   function findVocalRegions(audio, minDur = 0.3) {
     if (!audio || !audio.energy || !audio.energy.length) return null;
     const e = audio.energy, rate = audio.energyRate || 20;
@@ -38224,10 +38225,8 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
     }
     return merged.length ? merged : null;
   }
-
   function distributeLines(lines, duration, regions, beats) {
-    const n = lines.length;
-    const times = {};
+    const n = lines.length, times = {};
     if (n === 0) return times;
     if (regions && regions.length >= 1) {
       let ptr = 0;
@@ -38239,9 +38238,8 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
         for (let k = 0; k < count && ptr < n; k++, ptr++) slice.push(ptr);
         if (!slice.length) continue;
         const span = r.end - r.start;
-        for (let k = 0; k < slice.length; k++) {
+        for (let k = 0; k < slice.length; k++)
           times[slice[k]] = +(r.start + span * k / Math.max(1, slice.length)).toFixed(3);
-        }
       }
       while (ptr < n) { times[ptr] = +(duration * 0.88).toFixed(3); ptr++; }
     } else {
@@ -38270,6 +38268,7 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
     return times;
   }
 
+  // ===== AUTO LINE =====
   J.autoAlignLyrics = async function () {
     const S = window.S;
     if (!S || !S.project) throw new Error('Chưa có project');
@@ -38285,9 +38284,10 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
     S.project.timing.lineTimes = times;
     if (typeof window.replan === 'function') window.replan();
     else S.need = true;
-    return { mode: 'line', count: Object.keys(times).length, regions: regions ? regions.length : 0 };
+    return { mode: 'line', count: Object.keys(times).length };
   };
 
+  // ===== AUTO WORD =====
   J.autoAlignWords = async function () {
     const S = window.S;
     if (!S || !S.project) throw new Error('Chưa có project');
@@ -38296,46 +38296,36 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
     const lines = parsed.lines || [];
     if (!lines.length) throw new Error('Chưa có lời để căn');
     if (!S.project.timing) S.project.timing = {};
-    if (!S.project.timing.lineTimes || !Object.keys(S.project.timing.lineTimes).length) {
+    if (!S.project.timing.lineTimes || !Object.keys(S.project.timing.lineTimes).length)
       await J.autoAlignLyrics();
-    }
     const lineTimes = S.project.timing.lineTimes || {};
     const duration = S.audio.duration || S.audio.buffer.duration;
     const wordTimes = {};
     let totalWords = 0;
-
     for (let i = 0; i < lines.length; i++) {
       const ln = lines[i];
       const text = (ln.text || ln.raw || '').trim();
       if (!text || ln.interlude) { wordTimes[i] = []; continue; }
       const words = splitWords(text);
       if (!words.length) { wordTimes[i] = []; continue; }
-
       const start = lineTimes[i] != null ? +lineTimes[i] : (ln.start || 0);
-      let end;
-      if (lineTimes[i + 1] != null) end = +lineTimes[i + 1];
-      else if (i === lines.length - 1) end = duration;
-      else end = start + Math.max(1.2, text.length * 0.12);
-
+      let end = lineTimes[i+1] != null ? +lineTimes[i+1] : (i === lines.length-1 ? duration : start + Math.max(1.2, text.length*0.12));
       const span = Math.max(0.4, end - start);
       const weights = words.map(wordWeight);
-      const sumW = weights.reduce((a, b) => a + b, 0) || 1;
+      const sumW = weights.reduce((a,b)=>a+b,0) || 1;
       let t = start;
       const arr = [];
       for (let w = 0; w < words.length; w++) {
-        const dur = span * (weights[w] / sumW);
-        arr.push({ word: words[w], start: +t.toFixed(3), end: +(t + dur).toFixed(3) });
-        t += dur;
-        totalWords++;
+        const dur = span * (weights[w]/sumW);
+        arr.push({ word: words[w], start: +t.toFixed(3), end: +(t+dur).toFixed(3) });
+        t += dur; totalWords++;
       }
-      if (arr.length) arr[arr.length - 1].end = +end.toFixed(3);
+      if (arr.length) arr[arr.length-1].end = +end.toFixed(3);
       wordTimes[i] = arr;
-
       if (!S.project.overrides) S.project.overrides = {};
       if (!S.project.overrides[i]) S.project.overrides[i] = {};
-      S.project.overrides[i].cuts = Math.min(6, Math.max(1, Math.ceil(words.length / 2)));
+      S.project.overrides[i].cuts = Math.min(6, Math.max(1, Math.ceil(words.length/2)));
     }
-
     S.project.timing.wordTimes = wordTimes;
     for (let i = 0; i < lines.length; i++) {
       if (wordTimes[i] && wordTimes[i].length) lineTimes[i] = wordTimes[i][0].start;
@@ -38343,112 +38333,311 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
     S.project.timing.lineTimes = lineTimes;
     if (typeof window.replan === 'function') window.replan();
     else S.need = true;
-    return { mode: 'word', lines: lines.length, words: totalWords };
+    return { mode: 'word', words: totalWords };
   };
 
+  // ===== MANUAL WORD EDITOR =====
+  let currentLineIdx = -1;
+
+  function ensureWordTimesForLine(lineIdx) {
+    const S = window.S;
+    if (!S || !S.project) return [];
+    if (!S.project.timing) S.project.timing = {};
+    if (!S.project.timing.wordTimes) S.project.timing.wordTimes = {};
+    const parsed = J.parseLyrics(S.project.lyrics || '');
+    const ln = (parsed.lines || [])[lineIdx];
+    if (!ln) return [];
+    const text = (ln.text || ln.raw || '').trim();
+    if (!text || ln.interlude) return [];
+
+    let arr = S.project.timing.wordTimes[lineIdx];
+    const words = splitWords(text);
+    // nếu chưa có hoặc số từ lệch → tạo mới từ lineTimes
+    if (!arr || arr.length !== words.length) {
+      const lineTimes = S.project.timing.lineTimes || {};
+      const duration = (S.audio && (S.audio.duration || S.audio.buffer.duration)) || (S.plan && S.plan.duration) || 60;
+      const start = lineTimes[lineIdx] != null ? +lineTimes[lineIdx] : (ln.start || 0);
+      let end = lineTimes[lineIdx+1] != null ? +lineTimes[lineIdx+1] : start + Math.max(1.5, text.length*0.15);
+      if (end <= start) end = start + 1.5;
+      const span = end - start;
+      const weights = words.map(wordWeight);
+      const sumW = weights.reduce((a,b)=>a+b,0) || 1;
+      let t = start;
+      arr = [];
+      for (let w = 0; w < words.length; w++) {
+        const dur = span * (weights[w]/sumW);
+        arr.push({ word: words[w], start: +t.toFixed(3), end: +(t+dur).toFixed(3) });
+        t += dur;
+      }
+      if (arr.length) arr[arr.length-1].end = +end.toFixed(3);
+      S.project.timing.wordTimes[lineIdx] = arr;
+    }
+    return S.project.timing.wordTimes[lineIdx];
+  }
+
+  function openWordEditor(lineIdx) {
+    const S = window.S;
+    if (!S || !S.project) return;
+    currentLineIdx = lineIdx;
+    const arr = ensureWordTimesForLine(lineIdx);
+    const panel = document.getElementById('jzWordEditor');
+    if (!panel) return;
+    panel.style.display = 'block';
+    const title = panel.querySelector('.jz-we-title');
+    const list = panel.querySelector('.jz-we-list');
+    const parsed = J.parseLyrics(S.project.lyrics || '');
+    const ln = (parsed.lines || [])[lineIdx];
+    title.textContent = 'Căn từ thủ công — Dòng ' + (lineIdx+1) + (ln && ln.text ? ': ' + ln.text.slice(0,40) : '');
+
+    list.innerHTML = '';
+    if (!arr.length) {
+      list.innerHTML = '<div style="opacity:.7;padding:8px">Dòng này không có từ (hoặc là interlude).</div>';
+      return;
+    }
+
+    const lineTimes = S.project.timing.lineTimes || {};
+    const duration = (S.audio && (S.audio.duration || S.audio.buffer.duration)) || 999;
+    const lineStart = lineTimes[lineIdx] != null ? +lineTimes[lineIdx] : (ln && ln.start) || 0;
+    let lineEnd = lineTimes[lineIdx+1] != null ? +lineTimes[lineIdx+1] : lineStart + 3;
+    if (lineEnd <= lineStart) lineEnd = lineStart + 3;
+
+    arr.forEach((item, wi) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.06)';
+      const lab = document.createElement('span');
+      lab.style.cssText = 'min-width:90px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600';
+      lab.textContent = item.word;
+      lab.title = item.word;
+
+      const inpS = document.createElement('input');
+      inpS.type = 'number'; inpS.step = '0.01'; inpS.min = '0';
+      inpS.value = item.start.toFixed(2);
+      inpS.style.cssText = 'width:72px;padding:3px 6px;border-radius:4px;border:1px solid #444;background:#1a1a1f;color:#eee';
+      inpS.title = 'Thời điểm BẮT ĐẦU từ (giây)';
+
+      const inpE = document.createElement('input');
+      inpE.type = 'number'; inpE.step = '0.01'; inpE.min = '0';
+      inpE.value = item.end.toFixed(2);
+      inpE.style.cssText = 'width:72px;padding:3px 6px;border-radius:4px;border:1px solid #444;background:#1a1a1f;color:#eee';
+      inpE.title = 'Thời điểm KẾT THÚC từ (giây)';
+
+      const apply = () => {
+        let s = parseFloat(inpS.value), e = parseFloat(inpE.value);
+        if (!isFinite(s)) s = item.start;
+        if (!isFinite(e)) e = item.end;
+        // clamp trong khoảng dòng + monotonic với từ trước/sau
+        const prevEnd = wi > 0 ? arr[wi-1].end : lineStart;
+        const nextStart = wi < arr.length-1 ? arr[wi+1].start : lineEnd;
+        s = Math.max(prevEnd, Math.min(s, e - 0.05));
+        e = Math.min(nextStart, Math.max(e, s + 0.05));
+        item.start = +s.toFixed(3);
+        item.end = +e.toFixed(3);
+        inpS.value = item.start.toFixed(2);
+        inpE.value = item.end.toFixed(2);
+        // sync first word → lineTimes
+        if (wi === 0) {
+          if (!S.project.timing.lineTimes) S.project.timing.lineTimes = {};
+          S.project.timing.lineTimes[lineIdx] = item.start;
+        }
+        if (typeof window.replan === 'function') window.replan();
+        else S.need = true;
+        if (typeof window.seek === 'function') window.seek(item.start + 0.001);
+        else if (S) { S.t = item.start; S.need = true; }
+      };
+      inpS.addEventListener('change', apply);
+      inpE.addEventListener('change', apply);
+
+      const btnPlay = document.createElement('button');
+      btnPlay.type = 'button';
+      btnPlay.textContent = '▶';
+      btnPlay.title = 'Nghe từ vị trí từ này';
+      btnPlay.style.cssText = 'padding:2px 8px;cursor:pointer;border-radius:4px;border:1px solid #555;background:#222;color:#eee';
+      btnPlay.onclick = () => {
+        if (typeof window.seek === 'function') window.seek(item.start);
+        else if (S) { S.t = item.start; S.need = true; }
+        if (S && !S.playing && typeof window.play === 'function') window.play();
+      };
+
+      row.appendChild(lab);
+      row.appendChild(document.createTextNode('start'));
+      row.appendChild(inpS);
+      row.appendChild(document.createTextNode('end'));
+      row.appendChild(inpE);
+      row.appendChild(btnPlay);
+      list.appendChild(row);
+    });
+  }
+
+  function buildWordEditorPanel() {
+    if (document.getElementById('jzWordEditor')) return;
+    const panel = document.createElement('div');
+    panel.id = 'jzWordEditor';
+    panel.style.cssText = 'display:none;position:fixed;bottom:70px;right:16px;width:min(420px,92vw);max-height:55vh;overflow:auto;z-index:99998;background:#16161c;border:1px solid #333;border-radius:12px;padding:12px 14px;box-shadow:0 12px 40px rgba(0,0,0,.55);color:#eee;font-size:13px';
+    panel.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <strong class="jz-we-title" style="font-size:14px">Căn từ thủ công</strong>
+        <button type="button" id="jzWeClose" style="padding:2px 10px;cursor:pointer;border-radius:4px;border:1px solid #555;background:#222;color:#eee">Đóng</button>
+      </div>
+      <div style="opacity:.75;font-size:12px;margin-bottom:8px">Chỉnh start/end từng từ trong dòng. Dòng lời vẫn giữ nguyên. Timeline gốc vẫn dùng cho dòng.</div>
+      <div class="jz-we-list"></div>
+      <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
+        <button type="button" id="jzWeEven" style="padding:4px 10px;cursor:pointer;border-radius:4px;border:1px solid #555;background:#222;color:#eee">Chia đều trong dòng</button>
+        <button type="button" id="jzWeFromLine" style="padding:4px 10px;cursor:pointer;border-radius:4px;border:1px solid #555;background:#222;color:#eee">Lấy lại từ dòng</button>
+      </div>
+    `;
+    document.body.appendChild(panel);
+    panel.querySelector('#jzWeClose').onclick = () => { panel.style.display = 'none'; currentLineIdx = -1; };
+    panel.querySelector('#jzWeEven').onclick = () => {
+      if (currentLineIdx < 0) return;
+      const S = window.S;
+      const arr = S.project.timing.wordTimes[currentLineIdx];
+      if (!arr || !arr.length) return;
+      const start = arr[0].start;
+      const end = arr[arr.length-1].end;
+      const span = Math.max(0.3, end - start);
+      const weights = arr.map(x => wordWeight(x.word));
+      const sumW = weights.reduce((a,b)=>a+b,0) || 1;
+      let t = start;
+      for (let i = 0; i < arr.length; i++) {
+        const dur = span * (weights[i]/sumW);
+        arr[i].start = +t.toFixed(3);
+        arr[i].end = +(t+dur).toFixed(3);
+        t += dur;
+      }
+      arr[arr.length-1].end = +end.toFixed(3);
+      openWordEditor(currentLineIdx);
+      if (typeof window.replan === 'function') window.replan();
+    };
+    panel.querySelector('#jzWeFromLine').onclick = () => {
+      if (currentLineIdx < 0) return;
+      const S = window.S;
+      if (S.project.timing && S.project.timing.wordTimes)
+        delete S.project.timing.wordTimes[currentLineIdx];
+      openWordEditor(currentLineIdx);
+    };
+  }
+
+  // Thêm nút "Căn từ" vào mỗi dòng trong danh sách lời (khi list được build)
+  function injectLineWordButtons() {
+    const S = window.S;
+    if (!S || !S.lineEls) return;
+    S.lineEls.forEach((li, i) => {
+      if (!li || li.querySelector('.jz-word-btn')) return;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'jz-word-btn ghost icon';
+      btn.textContent = '🔤';
+      btn.title = 'Căn từ thủ công cho dòng này';
+      btn.style.cssText = 'margin-left:4px;padding:2px 6px;cursor:pointer;font-size:12px;opacity:.85';
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        buildWordEditorPanel();
+        openWordEditor(i);
+      };
+      // chèn gần meta / cuts
+      const meta = li.querySelector('.meta') || li;
+      meta.appendChild(btn);
+    });
+  }
+
+  // Hook replan / render list
+  const _origReplan = window.replan;
+  if (typeof _origReplan === 'function') {
+    window.replan = function() {
+      const r = _origReplan.apply(this, arguments);
+      setTimeout(injectLineWordButtons, 50);
+      return r;
+    };
+  }
+  // cũng observe list
+  const obs = new MutationObserver(() => setTimeout(injectLineWordButtons, 80));
+  setTimeout(() => {
+    const col = document.querySelector('.col-left') || document.body;
+    obs.observe(col, { childList: true, subtree: true });
+    injectLineWordButtons();
+  }, 1500);
+
+  // ---------- Auto buttons bar ----------
   function addButtons() {
     if (document.getElementById('jzAlignBar')) return;
     const wrap = document.createElement('div');
     wrap.id = 'jzAlignBar';
-    wrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0;';
+    wrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0';
 
-    const btnLine = document.createElement('button');
-    btnLine.id = 'jzAutoAlignBtn';
-    btnLine.type = 'button';
-    btnLine.style.cssText = 'padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;background:linear-gradient(135deg,#0ea5e9,#6366f1);color:#fff;border:none;font-weight:600;';
-    btnLine.innerHTML = '⚡ Tự căn dòng';
-    btnLine.title = 'Căn thời gian từng DÒNG lời với nhạc (energy + beat). Mọi ngôn ngữ.';
-
-    const btnWord = document.createElement('button');
-    btnWord.id = 'jzAutoWordBtn';
-    btnWord.type = 'button';
-    btnWord.style.cssText = 'padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;background:linear-gradient(135deg,#10b981,#059669);color:#fff;border:none;font-weight:600;';
-    btnWord.innerHTML = '🔤 Tự căn theo từ';
-    btnWord.title = 'Căn chi tiết từng TỪ trong dòng + tăng số cuts. Mọi ngôn ngữ.';
-
+    const mk = (id, html, grad, title) => {
+      const b = document.createElement('button');
+      b.id = id; b.type = 'button';
+      b.style.cssText = 'padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;background:'+grad+';color:#fff;border:none;font-weight:600';
+      b.innerHTML = html; b.title = title;
+      return b;
+    };
+    const btnLine = mk('jzAutoAlignBtn', '⚡ Tự căn dòng', 'linear-gradient(135deg,#0ea5e9,#6366f1)', 'Auto căn từng DÒNG');
+    const btnWord = mk('jzAutoWordBtn', '🔤 Tự căn theo từ', 'linear-gradient(135deg,#10b981,#059669)', 'Auto căn từng TỪ');
     const btnClear = document.createElement('button');
-    btnClear.id = 'jzClearAlignBtn';
     btnClear.type = 'button';
-    btnClear.style.cssText = 'padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;';
+    btnClear.style.cssText = 'padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px';
     btnClear.textContent = '↺ Xóa căn tự động';
     btnClear.title = 'Xóa lineTimes + wordTimes';
 
     btnLine.onclick = async () => {
       btnLine.disabled = true; btnWord.disabled = true;
       const old = btnLine.innerHTML;
-      btnLine.innerHTML = '⏳ Đang căn dòng...';
+      btnLine.innerHTML = '⏳ ...';
       try {
         const r = await J.autoAlignLyrics();
         btnLine.innerHTML = '✅ ' + r.count + ' dòng';
-        setTimeout(() => { btnLine.innerHTML = old; btnLine.disabled = false; btnWord.disabled = false; }, 2200);
+        setTimeout(() => { btnLine.innerHTML = old; btnLine.disabled = false; btnWord.disabled = false; }, 2000);
       } catch (e) {
-        btnLine.innerHTML = '❌ ' + (e.message || e);
-        setTimeout(() => { btnLine.innerHTML = old; btnLine.disabled = false; btnWord.disabled = false; }, 3000);
+        btnLine.innerHTML = '❌ ' + (e.message||e);
+        setTimeout(() => { btnLine.innerHTML = old; btnLine.disabled = false; btnWord.disabled = false; }, 2800);
       }
     };
-
     btnWord.onclick = async () => {
       btnLine.disabled = true; btnWord.disabled = true;
       const old = btnWord.innerHTML;
-      btnWord.innerHTML = '⏳ Đang căn từ...';
+      btnWord.innerHTML = '⏳ ...';
       try {
         const r = await J.autoAlignWords();
         btnWord.innerHTML = '✅ ' + r.words + ' từ';
-        setTimeout(() => { btnWord.innerHTML = old; btnLine.disabled = false; btnWord.disabled = false; }, 2200);
+        setTimeout(() => { btnWord.innerHTML = old; btnLine.disabled = false; btnWord.disabled = false; }, 2000);
       } catch (e) {
-        btnWord.innerHTML = '❌ ' + (e.message || e);
-        setTimeout(() => { btnWord.innerHTML = old; btnLine.disabled = false; btnWord.disabled = false; }, 3000);
+        btnWord.innerHTML = '❌ ' + (e.message||e);
+        setTimeout(() => { btnWord.innerHTML = old; btnLine.disabled = false; btnWord.disabled = false; }, 2800);
       }
     };
-
     btnClear.onclick = () => {
       if (!window.S || !S.project) return;
-      if (S.project.timing) {
-        S.project.timing.lineTimes = {};
-        S.project.timing.wordTimes = {};
-      }
+      if (S.project.timing) { S.project.timing.lineTimes = {}; S.project.timing.wordTimes = {}; }
       if (typeof window.replan === 'function') window.replan();
       btnClear.textContent = 'Đã xóa';
-      setTimeout(() => btnClear.textContent = '↺ Xóa căn tự động', 1500);
+      setTimeout(() => btnClear.textContent = '↺ Xóa căn tự động', 1400);
     };
 
     wrap.appendChild(btnLine);
     wrap.appendChild(btnWord);
     wrap.appendChild(btnClear);
 
-    const candidates = [
-      document.getElementById('tapPanel'),
-      document.querySelector('[id*="tap"]'),
-      document.querySelector('.tap'),
-    ];
     let placed = false;
+    const candidates = [document.getElementById('tapPanel'), document.querySelector('[id*="tap"]'), document.querySelector('.tap')];
     for (const c of candidates) {
       if (c) { c.parentNode.insertBefore(wrap, c.nextSibling); placed = true; break; }
     }
     if (!placed) {
-      const allBtn = document.querySelectorAll('button');
-      for (const b of allBtn) {
-        const t = (b.textContent || b.title || '').toLowerCase();
-        if (t.includes('tap') || t.includes('đồng bộ') || t.includes('sync') || t.includes('lrc') || t.includes('nhịp')) {
-          b.parentNode.insertBefore(wrap, b.nextSibling);
-          placed = true; break;
-        }
-      }
-    }
-    if (!placed) {
-      wrap.style.cssText += 'position:fixed;bottom:16px;right:16px;z-index:99999;background:rgba(0,0,0,0.75);padding:8px;border-radius:10px;';
+      wrap.style.cssText += ';position:fixed;bottom:16px;right:16px;z-index:99999;background:rgba(0,0,0,.75);padding:8px;border-radius:10px';
       document.body.appendChild(wrap);
     }
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => setTimeout(addButtons, 600));
+    document.addEventListener('DOMContentLoaded', () => { setTimeout(addButtons, 500); setTimeout(buildWordEditorPanel, 600); });
   } else {
-    setTimeout(addButtons, 600);
+    setTimeout(addButtons, 500);
+    setTimeout(buildWordEditorPanel, 600);
   }
   setTimeout(addButtons, 2000);
-  setTimeout(addButtons, 4000);
-  console.log('[AUTO-ALIGN] Line + Word ready');
+  setTimeout(injectLineWordButtons, 2500);
+
+  console.log('[WORD-TIMING] Ready: auto line/word + manual word editor per line (🔤 on each line)');
 })();
 </script>
 

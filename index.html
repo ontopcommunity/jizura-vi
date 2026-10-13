@@ -38016,622 +38016,275 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
 </script>
 
 
-<script>
-/* ================================================================
-   JIZURA VI — FULL FONT REPLACEMENT (Việt hóa toàn bộ)
-   Thay thế 100% font Nhật bản gốc bằng font hỗ trợ tiếng Việt đầy đủ dấu.
-   Giữ nguyên key để engine / style / omakase vẫn chạy đúng.
-   ================================================================ */
-(() => {
-  if (typeof J === 'undefined') { console.warn('[VI-FONTS] J not ready'); return; }
-  console.log('[VI-FONTS] Replacing all fonts with Vietnamese versions...');
-
-  const VI_SANS_FB = '"Be Vietnam Pro","Inter","Noto Sans","Roboto","Open Sans",sans-serif';
-  const VI_SERIF_FB = '"Noto Serif","Lora","Source Serif 4","Merriweather",serif';
-
-  // ========== CATALOGUE MỚI (Việt hóa) ==========
-  J.FONTS = {
-    // Gothic / Sans (thay Noto Sans JP)
-    gothic_black:  { label: 'Be Vietnam Pro Black',     family: '"Be Vietnam Pro"', weight: 900, kind: 'gothic', fb: VI_SANS_FB, gf: 'Be+Vietnam+Pro:wght@100;200;300;400;500;600;700;800;900' },
-    gothic_bold:   { label: 'Be Vietnam Pro Bold',      family: '"Be Vietnam Pro"', weight: 700, kind: 'gothic', fb: VI_SANS_FB, gf: 'Be+Vietnam+Pro:wght@100;200;300;400;500;600;700;800;900' },
-    gothic_med:    { label: 'Be Vietnam Pro Medium',    family: '"Be Vietnam Pro"', weight: 500, kind: 'gothic', fb: VI_SANS_FB, gf: 'Be+Vietnam+Pro:wght@100;200;300;400;500;600;700;800;900' },
-    gothic_light:  { label: 'Be Vietnam Pro Light',     family: '"Be Vietnam Pro"', weight: 300, kind: 'gothic', fb: VI_SANS_FB, gf: 'Be+Vietnam+Pro:wght@100;200;300;400;500;600;700;800;900' },
-
-    // Display heavy (thay Dela Gothic One)
-    dela:          { label: 'Oswald Bold',              family: '"Oswald"', weight: 700, kind: 'display', fb: VI_SANS_FB, gf: 'Oswald:wght@200;300;400;500;600;700' },
-
-    // Black gothic (thay Zen Kaku)
-    zenkaku:       { label: 'Inter Black',              family: '"Inter"', weight: 900, kind: 'gothic', fb: VI_SANS_FB, gf: 'Inter:wght@100..900' },
-
-    // Mincho / Serif (thay Zen Old Mincho + Noto Serif JP)
-    mincho_black:  { label: 'Noto Serif Black',         family: '"Noto Serif"', weight: 900, kind: 'mincho', fb: VI_SERIF_FB, gf: 'Noto+Serif:wght@100..900' },
-    mincho_bold:   { label: 'Noto Serif Bold',          family: '"Noto Serif"', weight: 700, kind: 'mincho', fb: VI_SERIF_FB, gf: 'Noto+Serif:wght@100..900' },
-    mincho:        { label: 'Noto Serif Medium',        family: '"Noto Serif"', weight: 500, kind: 'mincho', fb: VI_SERIF_FB, gf: 'Noto+Serif:wght@100..900' },
-    mincho_light:  { label: 'Noto Serif Light',         family: '"Noto Serif"', weight: 300, kind: 'mincho', fb: VI_SERIF_FB, gf: 'Noto+Serif:wght@100..900' },
-
-    // Tokumin style (thay Kaisei Tokumin)
-    tokumin:       { label: 'Playfair Display Bold',    family: '"Playfair Display"', weight: 700, kind: 'mincho', fb: VI_SERIF_FB, gf: 'Playfair+Display:wght@400..900' },
-
-    // Rounded (thay M PLUS Rounded)
-    round:         { label: 'Nunito ExtraBold',         family: '"Nunito"', weight: 800, kind: 'round', fb: VI_SANS_FB, gf: 'Nunito:wght@200..1000' },
-
-    // Pop (thay Mochiy Pop One)
-    pop:           { label: 'Quicksand Bold',           family: '"Quicksand"', weight: 700, kind: 'display', fb: VI_SANS_FB, gf: 'Quicksand:wght@300..700' },
-
-    // Pixel (thay DotGothic16) — giữ + fallback Latin
-    dot:           { label: 'DotGothic16',              family: '"DotGothic16"', weight: 400, kind: 'pixel', fb: VI_SANS_FB, gf: 'DotGothic16' },
-
-    // Brush / Hand (thay Yuji Syuku)
-    brush:         { label: 'EB Garamond',              family: '"EB Garamond"', weight: 500, kind: 'brush', fb: VI_SERIF_FB, gf: 'EB+Garamond:wght@400..800' },
-
-    // Mono (IBM Plex Mono đã hỗ trợ VN)
-    mono:          { label: 'IBM Plex Mono',            family: '"IBM Plex Mono"', weight: 500, kind: 'mono', fb: '"IBM Plex Sans",' + VI_SANS_FB, gf: 'IBM+Plex+Mono:wght@400;500;600;700' },
-
-    // Reggae style (thay Reggae One)
-    reggae:        { label: 'Anton',                    family: '"Anton"', weight: 400, kind: 'display', fb: VI_SANS_FB, gf: 'Anton' },
-
-    // Rampart (thay Rampart One)
-    rampart:       { label: 'Bebas Neue',               family: '"Bebas Neue"', weight: 400, kind: 'display', fb: VI_SANS_FB, gf: 'Bebas+Neue' },
-
-    // Potta (thay Potta One)
-    potta:         { label: 'Oswald Medium',            family: '"Oswald"', weight: 500, kind: 'brush', fb: VI_SANS_FB, gf: 'Oswald:wght@200;300;400;500;600;700' },
-
-    // Kiwi Maru → rounded soft
-    kiwi:          { label: 'Varela Round',             family: '"Varela Round"', weight: 400, kind: 'round', fb: VI_SANS_FB, gf: 'Varela+Round' },
-
-    // Klee One → hand
-    klee:          { label: 'Caveat Medium',            family: '"Caveat"', weight: 500, kind: 'hand', fb: VI_SERIF_FB, gf: 'Caveat:wght@400..700' },
-
-    // Shippori Mincho
-    shippori:      { label: 'Lora Bold',                family: '"Lora"', weight: 700, kind: 'mincho', fb: VI_SERIF_FB, gf: 'Lora:wght@400..700' },
-
-    // IBM Plex Sans JP → IBM Plex Sans (có VN)
-    sansui:        { label: 'IBM Plex Sans',            family: '"IBM Plex Sans"', weight: 500, kind: 'gothic', fb: VI_SANS_FB, gf: 'IBM+Plex+Sans:wght@100;200;300;400;500;600;700' },
-  };
-
-  // ========== Language system ==========
-  if (J.LANGS && !J.LANGS.includes('vi')) J.LANGS.push('vi');
-  if (J.LANG_LABEL) J.LANG_LABEL.vi = 'Tiếng Việt';
-
-  // Mặc định dùng vi
-  J.lang = 'vi';
-  if (typeof J.setLang === 'function') {
-    try { J.setLang('vi'); } catch(e) {}
-  }
-
-  // Auto-detect ưu tiên tiếng Việt
-  const _origDetect = J.detectLang;
-  J.detectLang = (text) => {
-    const t = String(text || '');
-    if (/[ơưăâêôđƠƯĂÂÊÔĐàáảãạèéẻẽẹìíỉĩịòóỏõọùúủũụỳýỷỹỵÀÁẢÃẠÈÉẺẼẸÌÍỈĨỊÒÓỎÕỌÙÚỦŨỤỲÝỶỸỴầấẩẫậằắẳẵặềếểễệồốổỗộờớởỡợừứửữự]/.test(t)) return 'vi';
-    return _origDetect ? _origDetect(t) : 'en';
-  };
-
-  // LANG_FACES.vi trỏ về chính catalogue mới (không cần map lại)
-  if (!J.LANG_FACES) J.LANG_FACES = {};
-  J.LANG_FACES.vi = {
-    sans:  { family: 'Be Vietnam Pro', weight: 500, gf: 'Be+Vietnam+Pro:wght@100;200;300;400;500;600;700;800;900' },
-    serif: { family: 'Noto Serif', weight: 500, gf: 'Noto+Serif:wght@100..900' },
-    fbSans: VI_SANS_FB,
-    fbSerif: VI_SERIF_FB,
-    map: {}   // dùng trực tiếp J.FONTS
-  };
-
-  // Pool ký tự Việt
-  if (J.POOLS) {
-    const VI = 'AĂÂBCDĐEÊGHIKLMNOÔƠPQRSTUƯVXYYaăâbcdđeêghiklmnoôơpqrstuưvxyyÀÁẢÃẠẰẮẲẴẶẦẤẨẪẬÈÉẺẼẸỀẾỂỄỆÌÍỈĨỊÒÓỎÕỌỒỐỔỖỘỜỚỞỠỢÙÚỦŨỤỪỨỬỮỰỲÝỶỸỴàáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵ0123456789';
-    J.POOLS.vi = {
-      kana: VI, hira: VI.toLowerCase(), half: '0123456789ABCDEF',
-      reel: VI + '0123456789', scramble: VI + '★◆▲●■#$%&', signs: VI.slice(0, 50) + '#*+=/<>01'
-    };
-  }
-
-  // Variable weight (@var) → dùng Inter + Noto Serif thay Noto JP
-  const _origEnsure = J.ensureFonts;
-  J.ensureFonts = async (text, keys) => {
-    if (keys && keys.includes('@var')) {
-      // load variable Latin fonts thay JP
-      const specs = ['Inter:wght@100..900', 'Noto+Serif:wght@100..900', 'Be+Vietnam+Pro:wght@100;200;300;400;500;600;700;800;900'];
-      for (const s of specs) {
-        try {
-          const l = document.createElement('link');
-          l.rel = 'stylesheet';
-          l.href = 'https://fonts.googleapis.com/css2?family=' + s + '&display=swap';
-          document.head.appendChild(l);
-        } catch(e) {}
-      }
-      // vẫn gọi gốc nhưng đã thay FONTS rồi nên sẽ load đúng
-    }
-    if (_origEnsure) return _origEnsure(text, keys);
-  };
-
-  // faceOf: khi lang=vi thì trả về chính FONTS (đã Việt hóa)
-  const _origFaceOf = J.faceOf;
-  J.faceOf = (key) => {
-    if (J.lang === 'vi' || !J.lang) {
-      return J.FONTS[key] || J.FONTS.gothic_bold;
-    }
-    return _origFaceOf ? _origFaceOf(key) : (J.FONTS[key] || J.FONTS.gothic_bold);
-  };
-
-  console.log('[VI-FONTS] Done. All', Object.keys(J.FONTS).length, 'fonts replaced with Vietnamese versions.');
-  console.log('[VI-FONTS] Primary:', J.FONTS.gothic_bold.label, '+', J.FONTS.mincho.label);
-})();
-</script>
-
-
-
-
 
 <script>
 /* ================================================================
-   JIZURA VI — WORD MARKERS TRÊN TIMELINE (kéo như điểm dòng)
-   - Marker dòng (gốc): tam giác trên, cyan/xám
-   - Marker TỪ: gạch xanh lá ở giữa timeline, kéo được
-   - Giữ nguyên chuyển cảnh theo dòng; thêm khớp từng từ với nhạc
+   JIZURA VI — KÉO ĐIỂM CHUYỂN CẢNH GIỮA CÁC CUT (từng từ/đoạn)
+   Dùng đúng cutTime của engine gốc.
+   - Marker dòng (tam giác): như cũ
+   - Biên giữa 2 cut cùng dòng: kéo được → set overrides[line].cutTime
+   Không auto linh tinh. Thủ công như đặt điểm chuyển cảnh.
    ================================================================ */
 (() => {
-  if (typeof J === 'undefined') return;
-  console.log('[WORD-TL] Timeline word markers installing...');
+  if (typeof window === 'undefined') return;
+  console.log('[CUT-DRAG] Manual cut boundary drag on timeline');
 
-  const TW = { drag: null, hover: null, enabled: true }; // {line, word} or null
+  const CD = { drag: null, hover: null }; // { line, k } k = cut index within line (>=1)
 
-  function splitWords(text) {
-    const t = String(text || '').trim();
-    if (!t) return [];
-    if (/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(t) && !/\s/.test(t))
-      return [...t].filter(c => c.trim());
-    return t.split(/(\s+)/).filter(w => w.trim().length > 0);
-  }
-  function wordWeight(w) {
-    let s = 0;
-    for (const c of w) {
-      const u = c.codePointAt(0);
-      if (u >= 0x3400 && u <= 0x9fff) s += 1.6;
-      else if (u >= 0xac00 && u <= 0xd7af) s += 1.4;
-      else if (u >= 0x3040 && u <= 0x30ff) s += 1.3;
-      else if (/[ăâêôơưđ]/i.test(c)) s += 1.15;
-      else s += 1;
-    }
-    return Math.max(0.6, s);
-  }
-
-  function getWordTimes() {
+  function lyricCutsOfLine(lineIdx) {
     const S = window.S;
-    if (!S || !S.project) return null;
-    if (!S.project.timing) S.project.timing = {};
-    return S.project.timing.wordTimes || null;
+    if (!S || !S.plan) return [];
+    return S.plan.cuts.filter(c => c.line === lineIdx && J.LAYOUTS[c.layout] && !J.LAYOUTS[c.layout].special);
   }
 
-  // Tạo wordTimes cho 1 dòng nếu chưa có (từ lineTimes)
-  function ensureLineWords(lineIdx) {
+  // Hit-test biên giữa các cut (cạnh trái của cut k>=1)
+  function cutEdgeAt(ev) {
     const S = window.S;
-    if (!S || !S.project || !S.plan) return null;
-    if (!S.project.timing) S.project.timing = {};
-    if (!S.project.timing.wordTimes) S.project.timing.wordTimes = {};
-    const ln = S.plan.lines[lineIdx];
-    if (!ln || ln.interlude) return null;
-    const text = (ln.text || '').trim();
-    if (!text) return null;
-    const words = splitWords(text);
-    if (!words.length) return null;
-
-    let arr = S.project.timing.wordTimes[lineIdx];
-    if (arr && arr.length === words.length) return arr;
-
-    const LT = S.project.timing.lineTimes || {};
-    const start = LT[lineIdx] != null ? +LT[lineIdx] : ln.start;
-    let end = LT[lineIdx + 1] != null ? +LT[lineIdx + 1]
-      : (lineIdx + 1 < S.plan.lines.length ? S.plan.lines[lineIdx + 1].start : S.plan.duration);
-    if (!(end > start)) end = start + Math.max(1.2, text.length * 0.12);
-    const span = end - start;
-    const weights = words.map(wordWeight);
-    const sumW = weights.reduce((a, b) => a + b, 0) || 1;
-    let t = start;
-    arr = [];
-    for (let i = 0; i < words.length; i++) {
-      const dur = span * (weights[i] / sumW);
-      arr.push({ word: words[i], start: +t.toFixed(3), end: +(t + dur).toFixed(3) });
-      t += dur;
-    }
-    if (arr.length) arr[arr.length - 1].end = +end.toFixed(3);
-    S.project.timing.wordTimes[lineIdx] = arr;
-    return arr;
-  }
-
-  function ensureAllWordMarkers() {
-    const S = window.S;
-    if (!S || !S.plan || !S.plan.lines) return;
-    for (let i = 0; i < S.plan.lines.length; i++) ensureLineWords(i);
-  }
-
-  // ----- Vẽ marker từ lên timeline (hook sau drawTimeline) -----
-  function drawWordMarkers() {
-    if (!TW.enabled) return;
-    const S = window.S;
-    if (!S || !S.plan || !S.project) return;
-    const c = document.getElementById('timeline');
-    if (!c) return;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const w = c.width, h = c.height;
-    if (!w || !h) return;
-    // lấy view giống gốc
-    let D, vd, off;
-    try {
-      if (typeof tlView === 'function') {
-        const v = tlView();
-        D = v.D; vd = v.vd; off = v.off;
-      } else return;
-    } catch (e) { return; }
-    const x = c.getContext('2d');
-    const X = t => (t - off) / vd * w;
-    const midY = h * 0.55;
-    const WT = S.project.timing && S.project.timing.wordTimes;
-    if (!WT) return;
-
-    for (const lineIdx of Object.keys(WT)) {
-      const arr = WT[lineIdx];
-      if (!arr || !arr.length) continue;
-      const li = +lineIdx;
-      for (let wi = 0; wi < arr.length; wi++) {
-        const item = arr[wi];
-        const lx = X(item.start);
-        if (lx < -30 || lx > w + 30) continue;
-        const isOn = TW.drag && TW.drag.line === li && TW.drag.word === wi;
-        const isHv = TW.hover && TW.hover.line === li && TW.hover.word === wi;
-        // thân marker
-        x.fillStyle = isOn ? '#fbbf24' : isHv ? '#4ade80' : '#22c55e';
-        x.fillRect(lx - (isOn || isHv ? 1.5*dpr : 0.8*dpr), midY - 10*dpr, isOn || isHv ? 3*dpr : 1.6*dpr, 20*dpr);
-        // kim cương nhỏ
-        x.beginPath();
-        x.moveTo(lx, midY - 6*dpr);
-        x.lineTo(lx + 4*dpr, midY);
-        x.lineTo(lx, midY + 6*dpr);
-        x.lineTo(lx - 4*dpr, midY);
-        x.closePath();
-        x.fill();
-        // chữ từ khi zoom to
-        if (typeof TL !== 'undefined' && TL.z > 2.5 && item.word) {
-          x.fillStyle = 'rgba(187,247,208,0.9)';
-          x.font = `${9 * dpr}px monospace`;
-          x.fillText(String(item.word).slice(0, 8), lx + 5*dpr, midY - 2*dpr);
-        }
-      }
-    }
-  }
-
-  // Hook drawTimeline
-  function hookDraw() {
-    if (typeof window.drawTimeline !== 'function') return false;
-    if (window.drawTimeline.__wordHooked) return true;
-    const orig = window.drawTimeline;
-    window.drawTimeline = function () {
-      const r = orig.apply(this, arguments);
-      try { drawWordMarkers(); } catch (e) { console.warn(e); }
-      return r;
-    };
-    window.drawTimeline.__wordHooked = true;
-    return true;
-  }
-
-  // Hit-test marker từ (ưu tiên vùng giữa timeline)
-  function wordHandleAt(ev) {
-    const S = window.S;
-    if (!S || !S.project || !S.project.timing || !S.project.timing.wordTimes) return null;
+    if (!S || !S.plan) return null;
     const c = document.getElementById('timeline');
     if (!c) return null;
     const r = c.getBoundingClientRect();
     let vd, off;
-    try {
-      const v = tlView();
-      vd = v.vd; off = v.off;
-    } catch (e) { return null; }
+    try { const v = tlView(); vd = v.vd; off = v.off; } catch (e) { return null; }
+    // vùng giữa timeline (tránh đụng handle dòng ở top)
     const yRatio = (ev.clientY - r.top) / r.height;
-    // chỉ bắt ở nửa dưới–giữa (tránh đụng handle dòng ở top)
-    if (yRatio < 0.35 || yRatio > 0.85) return null;
-    let best = null, bd = 10;
-    const WT = S.project.timing.wordTimes;
-    for (const lineIdx of Object.keys(WT)) {
-      const arr = WT[lineIdx];
-      if (!arr) continue;
-      for (let wi = 0; wi < arr.length; wi++) {
-        const px = (arr[wi].start - off) / vd * r.width;
+    if (yRatio < 0.28) return null;
+
+    let best = null, bd = 9;
+    const linesDone = new Set();
+    for (const cut of S.plan.cuts) {
+      if (cut.line < 0 || linesDone.has(cut.line)) continue;
+      const cuts = lyricCutsOfLine(cut.line);
+      if (cuts.length < 2) continue;
+      linesDone.add(cut.line);
+      for (let k = 1; k < cuts.length; k++) {
+        const px = (cuts[k].start - off) / vd * r.width;
         const d = Math.abs(px - (ev.clientX - r.left));
-        if (d < bd) { bd = d; best = { line: +lineIdx, word: wi }; }
+        if (d < bd) { bd = d; best = { line: cut.line, k, cut: cuts[k], prev: cuts[k-1], next: cuts[k+1] || null }; }
       }
     }
     return best;
   }
 
-  function wordDragTo(ref, ev) {
+  function drawCutEdges() {
     const S = window.S;
-    if (!S || !ref) return;
-    const arr = S.project.timing.wordTimes[ref.line];
-    if (!arr || !arr[ref.word]) return;
-    let t;
-    try { t = tlTime(ev); } catch (e) { return; }
-    // snap beat (trừ khi giữ Shift)
-    if (!ev.shiftKey && S.plan && S.plan.beats && S.plan.beats.length) {
-      let bt = null, bd = 0.1;
-      for (const b of S.plan.beats) {
-        const d = Math.abs(b - t);
-        if (d < bd) { bd = d; bt = b; }
-        if (b > t + 0.15) break;
+    if (!S || !S.plan) return;
+    const c = document.getElementById('timeline');
+    if (!c) return;
+    let vd, off, D;
+    try { const v = tlView(); vd = v.vd; off = v.off; D = v.D; } catch (e) { return; }
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = c.width, h = c.height;
+    const x = c.getContext('2d');
+    const X = t => (t - off) / vd * w;
+    const top = h * 0.3, bot = h - 8 * dpr;
+
+    const linesDone = new Set();
+    for (const cut of S.plan.cuts) {
+      if (cut.line < 0 || linesDone.has(cut.line)) continue;
+      const cuts = lyricCutsOfLine(cut.line);
+      if (cuts.length < 2) continue;
+      linesDone.add(cut.line);
+      for (let k = 1; k < cuts.length; k++) {
+        const lx = X(cuts[k].start);
+        if (lx < -20 || lx > w + 20) continue;
+        const isOn = CD.drag && CD.drag.line === cut.line && CD.drag.k === k;
+        const isHv = CD.hover && CD.hover.line === cut.line && CD.hover.k === k;
+        // vạch biên dày, màu vàng/cam — giống điểm chuyển cảnh
+        x.fillStyle = isOn ? '#fbbf24' : isHv ? '#f59e0b' : 'rgba(251,191,36,0.85)';
+        x.fillRect(lx - (isOn || isHv ? 2*dpr : 1.2*dpr), top, isOn || isHv ? 4*dpr : 2.4*dpr, bot - top);
+        // tay nắm nhỏ giữa
+        x.beginPath();
+        x.moveTo(lx - 5*dpr, (top+bot)/2 - 6*dpr);
+        x.lineTo(lx + 5*dpr, (top+bot)/2 - 6*dpr);
+        x.lineTo(lx + 5*dpr, (top+bot)/2 + 6*dpr);
+        x.lineTo(lx - 5*dpr, (top+bot)/2 + 6*dpr);
+        x.closePath();
+        x.fillStyle = isOn ? '#fef3c7' : '#fbbf24';
+        x.fill();
+        x.strokeStyle = 'rgba(0,0,0,0.5)';
+        x.lineWidth = 1;
+        x.stroke();
       }
-      if (bt != null) t = bt;
     }
-    const prevEnd = ref.word > 0 ? arr[ref.word - 1].start + 0.05 : -Infinity;
-    const nextStart = ref.word < arr.length - 1 ? arr[ref.word + 1].start - 0.05 : Infinity;
-    // giới hạn trong dòng
-    const ln = S.plan.lines[ref.line];
-    const LT = S.project.timing.lineTimes || {};
-    const lineStart = LT[ref.line] != null ? +LT[ref.line] : (ln ? ln.start : 0);
-    let lineEnd = LT[ref.line + 1] != null ? +LT[ref.line + 1]
-      : (ref.line + 1 < S.plan.lines.length ? S.plan.lines[ref.line + 1].start : S.plan.duration);
-    t = Math.max(lineStart, Math.min(lineEnd - 0.05, t));
-    t = Math.max(prevEnd, Math.min(nextStart, t));
-    t = +t.toFixed(3);
+  }
 
-    const oldStart = arr[ref.word].start;
-    const delta = t - oldStart;
-    arr[ref.word].start = t;
-    // kéo end theo nếu còn chỗ
-    if (arr[ref.word].end < t + 0.05) arr[ref.word].end = t + 0.08;
-    // từ đầu dòng → cập nhật lineTimes
-    if (ref.word === 0) {
-      if (!S.project.timing.lineTimes) S.project.timing.lineTimes = {};
-      S.project.timing.lineTimes[ref.line] = t;
-      // pin neighbours line
-      S.plan.lines.forEach(l => {
-        if (S.project.timing.lineTimes[l.index] == null)
-          S.project.timing.lineTimes[l.index] = +l.start.toFixed(3);
-      });
+  function applyCutTime(line, k, absTime) {
+    const S = window.S;
+    if (!S || !S.plan) return;
+    const ln = S.plan.lines[line];
+    if (!ln) return;
+    const cuts = lyricCutsOfLine(line);
+    if (k < 1 || k >= cuts.length) return;
+
+    // relative to line start (đúng format cutTime gốc)
+    let rel = absTime - ln.start;
+    // clamp giữa cut trước và sau
+    const minRel = (k >= 1 ? (cuts[k-1].start - ln.start) : 0) + 0.22;
+    const maxRel = (k + 1 < cuts.length ? (cuts[k+1].start - ln.start) : (ln.end - ln.start)) - 0.22;
+    rel = Math.max(minRel, Math.min(maxRel, rel));
+    rel = +rel.toFixed(3);
+
+    if (typeof window.pushEdit === 'function') window.pushEdit();
+    if (typeof window.setOv === 'function') {
+      const cur = (S.project.overrides && S.project.overrides[line]) || {};
+      const ct = Object.assign({}, cur.cutTime || {});
+      ct[k] = rel;
+      window.setOv(line, { cutTime: ct });
+    } else {
+      if (!S.project.overrides) S.project.overrides = {};
+      if (!S.project.overrides[line]) S.project.overrides[line] = {};
+      if (!S.project.overrides[line].cutTime) S.project.overrides[line].cutTime = {};
+      S.project.overrides[line].cutTime[k] = rel;
     }
-    // cập nhật end của từ trước
-    if (ref.word > 0) arr[ref.word - 1].end = t;
+  }
 
-    if (typeof window.replan === 'function') {
-      // chỉ replan khi thả để mượt khi kéo
-      if (!TW._dragging) window.replan();
-    } else S.need = true;
-    if (typeof window.drawTimeline === 'function') window.drawTimeline();
-    if (typeof window.seek === 'function') window.seek(t + 0.001);
+  function hookDraw() {
+    if (typeof window.drawTimeline !== 'function' || window.drawTimeline.__cutDragHooked) return !!window.drawTimeline;
+    const orig = window.drawTimeline;
+    window.drawTimeline = function () {
+      const r = orig.apply(this, arguments);
+      try { drawCutEdges(); } catch (e) {}
+      return r;
+    };
+    window.drawTimeline.__cutDragHooked = true;
+    return true;
   }
 
   function hookPointer() {
     const tl = document.getElementById('timeline');
-    if (!tl || tl.__wordPointerHooked) return !!tl;
-    tl.__wordPointerHooked = true;
+    if (!tl || tl.__cutDragHooked) return !!tl;
+    tl.__cutDragHooked = true;
 
     tl.addEventListener('pointerdown', (e) => {
-      if (S.tap || S.exporting) return;
-      const wh = wordHandleAt(e);
-      if (wh) {
-        e.stopPropagation();
-        e.preventDefault();
-        if (typeof window.pushEdit === 'function') window.pushEdit();
-        TW.drag = wh;
-        TW._dragging = true;
-        if (typeof window.pause === 'function') window.pause();
-        tl.style.cursor = 'ew-resize';
-        tl.setPointerCapture && tl.setPointerCapture(e.pointerId);
-      }
-    }, true); // capture để ưu tiên hơn line handle khi ở vùng giữa
+      const S = window.S;
+      if (!S || S.tap || S.exporting) return;
+      // Không bắt nếu đang bắt handle dòng (top)
+      try {
+        if (typeof tlHandleAt === 'function' && tlHandleAt(e) >= 0) {
+          // nếu pointer ở top band thì để gốc xử lý dòng
+          const r = tl.getBoundingClientRect();
+          if ((e.clientY - r.top) / r.height < 0.35) return;
+        }
+      } catch (err) {}
+      const edge = cutEdgeAt(e);
+      if (!edge) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof window.pushEdit === 'function') window.pushEdit();
+      if (typeof window.pause === 'function') window.pause();
+      CD.drag = edge;
+      tl.style.cursor = 'ew-resize';
+      try { tl.setPointerCapture(e.pointerId); } catch (err) {}
+    }, true);
 
     tl.addEventListener('pointermove', (e) => {
-      if (TW.drag) {
+      if (CD.drag) {
+        e.preventDefault();
         e.stopPropagation();
-        wordDragTo(TW.drag, e);
+        let t;
+        try { t = tlTime(e); } catch (err) { return; }
+        // snap beat trừ Shift
+        const S = window.S;
+        if (!e.shiftKey && S.plan && S.plan.beats && S.plan.beats.length) {
+          let bt = null, bd = 0.1;
+          for (const b of S.plan.beats) {
+            const d = Math.abs(b - t);
+            if (d < bd) { bd = d; bt = b; }
+            if (b > t + 0.15) break;
+          }
+          if (bt != null) t = bt;
+        }
+        applyCutTime(CD.drag.line, CD.drag.k, t);
+        // replan nhẹ khi kéo
+        if (typeof window.replan === 'function') window.replan();
+        if (typeof window.drawTimeline === 'function') window.drawTimeline();
+        if (typeof window.seek === 'function') window.seek(t + 0.001);
         return;
       }
-      const hv = wordHandleAt(e);
-      if (JSON.stringify(hv) !== JSON.stringify(TW.hover)) {
-        TW.hover = hv;
-        if (hv) tl.style.cursor = 'ew-resize';
+      const hv = cutEdgeAt(e);
+      const same = hv && CD.hover && hv.line === CD.hover.line && hv.k === CD.hover.k;
+      if (!same) {
+        CD.hover = hv;
+        tl.style.cursor = hv ? 'ew-resize' : '';
         if (typeof window.drawTimeline === 'function') window.drawTimeline();
       }
     }, true);
 
-    const endDrag = (e) => {
-      if (TW.drag) {
-        TW._dragging = false;
-        const d = TW.drag;
-        TW.drag = null;
-        // replan 1 lần khi thả
-        if (typeof window.replan === 'function') window.replan();
-        if (typeof window.flushSave === 'function') window.flushSave();
-        if (typeof window.renderLines === 'function') window.renderLines();
-        if (typeof window.drawTimeline === 'function') window.drawTimeline();
-        tl.style.cursor = 'pointer';
-      }
+    const endDrag = () => {
+      if (!CD.drag) return;
+      CD.drag = null;
+      if (typeof window.replan === 'function') window.replan();
+      if (typeof window.flushSave === 'function') window.flushSave();
+      if (typeof window.renderLines === 'function') window.renderLines();
+      if (typeof window.drawTimeline === 'function') window.drawTimeline();
     };
     tl.addEventListener('pointerup', endDrag, true);
     tl.addEventListener('pointercancel', endDrag, true);
     return true;
   }
 
-  // ----- Auto align (giữ) -----
-  function findVocalRegions(audio, minDur = 0.3) {
-    if (!audio || !audio.energy || !audio.energy.length) return null;
-    const e = audio.energy, rate = audio.energyRate || 20;
-    let sum = 0, sum2 = 0;
-    for (let i = 0; i < e.length; i++) { sum += e[i]; sum2 += e[i]*e[i]; }
-    const mean = sum / e.length;
-    const std = Math.sqrt(Math.max(0, sum2 / e.length - mean * mean));
-    const th = mean + std * 0.32;
-    const regions = []; let start = null;
-    for (let i = 0; i < e.length; i++) {
-      const on = e[i] >= th;
-      if (on && start === null) start = i / rate;
-      if (!on && start !== null) {
-        const end = i / rate;
-        if (end - start >= minDur) regions.push({ start, end });
-        start = null;
+  // Nút nhỏ: tách dòng hiện tại thành N cut = số từ (để có biên kéo)
+  function splitCurrentLineToWords() {
+    const S = window.S;
+    if (!S || !S.plan) return alert('Chưa có plan');
+    // lấy dòng đang phát
+    let li = -1;
+    if (S.plan.lines) {
+      for (const ln of S.plan.lines) {
+        if (S.t >= ln.start && S.t < ln.end) { li = ln.index; break; }
       }
     }
-    if (start !== null) {
-      const end = e.length / rate;
-      if (end - start >= minDur) regions.push({ start, end });
+    if (li < 0 && S.curLine >= 0) li = S.curLine;
+    if (li < 0) li = 0;
+    const ln = S.plan.lines[li];
+    if (!ln || ln.interlude) return alert('Dòng không hợp lệ');
+    const text = (ln.text || '').trim();
+    const words = text.split(/\s+/).filter(Boolean);
+    // CJK: mỗi cụm ngắn
+    let n = words.length;
+    if (n <= 1 && text.length > 1 && /[\u3400-\u9fff\uac00-\ud7af\u3040-\u30ff]/.test(text)) {
+      n = Math.min(6, Math.max(2, Math.ceil(text.length / 2)));
     }
-    const merged = [];
-    for (const r of regions) {
-      if (merged.length && r.start - merged[merged.length-1].end < 0.35)
-        merged[merged.length-1].end = r.end;
-      else merged.push({ ...r });
-    }
-    return merged.length ? merged : null;
-  }
-  function distributeLines(lines, duration, regions, beats) {
-    const n = lines.length, times = {};
-    if (!n) return times;
-    if (regions && regions.length) {
-      let ptr = 0; const per = n / regions.length;
-      for (let ri = 0; ri < regions.length; ri++) {
-        const r = regions[ri];
-        const count = Math.max(1, Math.round(ri === regions.length-1 ? n-ptr : per));
-        const slice = [];
-        for (let k = 0; k < count && ptr < n; k++, ptr++) slice.push(ptr);
-        if (!slice.length) continue;
-        const span = r.end - r.start;
-        for (let k = 0; k < slice.length; k++)
-          times[slice[k]] = +(r.start + span * k / Math.max(1, slice.length)).toFixed(3);
-      }
-      while (ptr < n) { times[ptr] = +(duration * 0.88).toFixed(3); ptr++; }
+    n = Math.max(2, Math.min(8, n));
+    if (typeof window.setOv === 'function') {
+      window.setOv(li, { cuts: n });
     } else {
-      const step = Math.max(1, duration * 0.92) / Math.max(1, n);
-      for (let i = 0; i < n; i++) {
-        let t = i * step + 0.12;
-        if (beats && beats.length) {
-          let best = t, bd = 0.22;
-          for (const b of beats) { const d = Math.abs(b - t); if (d < bd) { bd = d; best = b; } }
-          t = best;
-        }
-        times[i] = +Math.max(0, Math.min(duration - 0.05, t)).toFixed(3);
-      }
+      if (!S.project.overrides) S.project.overrides = {};
+      if (!S.project.overrides[li]) S.project.overrides[li] = {};
+      S.project.overrides[li].cuts = n;
     }
-    let prev = -0.05;
-    for (let i = 0; i < n; i++) {
-      let t = times[i] != null ? times[i] : prev + 0.7;
-      if (t <= prev) t = prev + 0.28;
-      times[i] = +t.toFixed(3); prev = t;
-    }
-    return times;
+    if (typeof window.replan === 'function') window.replan();
+    if (typeof window.drawTimeline === 'function') window.drawTimeline();
+    alert('Dòng ' + (li+1) + ' → ' + n + ' cut. Kéo vạch VÀNG trên timeline để chỉnh điểm chuyển cảnh từng đoạn.');
   }
 
-  J.autoAlignLyrics = async function () {
-    const S = window.S;
-    if (!S || !S.project) throw new Error('Chưa có project');
-    if (!S.audio || !S.audio.buffer) throw new Error('Upload nhạc trước');
-    const parsed = J.parseLyrics(S.project.lyrics || '');
-    const lines = parsed.lines || [];
-    if (!lines.length) throw new Error('Chưa có lời');
-    const duration = S.audio.duration || S.audio.buffer.duration;
-    const times = distributeLines(lines, duration, findVocalRegions(S.audio), (S.plan && S.plan.beats) || S.audio.beats || []);
-    if (!S.project.timing) S.project.timing = {};
-    S.project.timing.lineTimes = times;
-    if (typeof window.replan === 'function') window.replan();
-    else S.need = true;
-    if (typeof window.drawTimeline === 'function') window.drawTimeline();
-    return { count: Object.keys(times).length };
-  };
-
-  J.autoAlignWords = async function () {
-    const S = window.S;
-    if (!S || !S.project) throw new Error('Chưa có project');
-    if (!S.audio || !S.audio.buffer) throw new Error('Upload nhạc trước');
-    if (!S.project.timing) S.project.timing = {};
-    if (!S.project.timing.lineTimes || !Object.keys(S.project.timing.lineTimes).length)
-      await J.autoAlignLyrics();
-    if (typeof window.replan === 'function') window.replan();
-    ensureAllWordMarkers();
-    // refine words from lineTimes
-    if (S.plan && S.plan.lines) {
-      for (let i = 0; i < S.plan.lines.length; i++) {
-        delete S.project.timing.wordTimes[i];
-        ensureLineWords(i);
-      }
-    }
-    if (typeof window.replan === 'function') window.replan();
-    if (typeof window.drawTimeline === 'function') window.drawTimeline();
-    let words = 0;
-    const WT = S.project.timing.wordTimes || {};
-    for (const k of Object.keys(WT)) words += (WT[k] || []).length;
-    return { words };
-  };
-
-  // ----- UI buttons -----
-  function addBar() {
-    if (document.getElementById('jzAlignBar')) return;
-    const wrap = document.createElement('div');
-    wrap.id = 'jzAlignBar';
-    wrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0;padding:6px;background:rgba(0,0,0,.35);border-radius:8px';
-    const styleBtn = (bg) => 'padding:7px 12px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:700;border:none;color:#fff;background:' + bg;
-
-    const b1 = document.createElement('button');
-    b1.type = 'button'; b1.style.cssText = styleBtn('linear-gradient(135deg,#0ea5e9,#6366f1)');
-    b1.textContent = '⚡ Tự căn dòng';
-    b1.title = 'Căn marker dòng theo nhạc';
-    b1.onclick = async () => {
-      b1.disabled = true; b1.textContent = '⏳...';
-      try { const r = await J.autoAlignLyrics(); b1.textContent = '✅ ' + r.count + ' dòng'; }
-      catch (e) { b1.textContent = '❌ ' + (e.message || e); }
-      setTimeout(() => { b1.textContent = '⚡ Tự căn dòng'; b1.disabled = false; }, 2000);
-    };
-
-    const b2 = document.createElement('button');
-    b2.type = 'button'; b2.style.cssText = styleBtn('linear-gradient(135deg,#22c55e,#16a34a)');
-    b2.textContent = '🔤 Hiện + căn marker TỪ';
-    b2.title = 'Tạo marker từng từ trên timeline — kéo xanh lá để khớp nhạc';
-    b2.onclick = async () => {
-      b2.disabled = true; b2.textContent = '⏳...';
-      try {
-        const r = await J.autoAlignWords();
-        TW.enabled = true;
-        if (typeof window.drawTimeline === 'function') window.drawTimeline();
-        b2.textContent = '✅ ' + r.words + ' từ (kéo trên timeline)';
-      } catch (e) { b2.textContent = '❌ ' + (e.message || e); }
-      setTimeout(() => { b2.textContent = '🔤 Hiện + căn marker TỪ'; b2.disabled = false; }, 2500);
-    };
-
-    const b3 = document.createElement('button');
-    b3.type = 'button'; b3.style.cssText = 'padding:6px 10px;border-radius:6px;cursor:pointer;font-size:12px;border:1px solid #555;background:#222;color:#eee';
-    b3.textContent = '↺ Xóa marker từ';
-    b3.onclick = () => {
-      const S = window.S;
-      if (S && S.project && S.project.timing) S.project.timing.wordTimes = {};
-      if (typeof window.drawTimeline === 'function') window.drawTimeline();
-      b3.textContent = 'Đã xóa';
-      setTimeout(() => { b3.textContent = '↺ Xóa marker từ'; }, 1200);
-    };
-
-    const tip = document.createElement('span');
-    tip.style.cssText = 'font-size:11px;opacity:.8;max-width:280px';
-    tip.textContent = 'Marker XANH LÁ = từng từ. Kéo trên timeline (vùng giữa) để khớp nhạc. Marker dòng (tam giác trên) vẫn như cũ.';
-
-    wrap.appendChild(b1); wrap.appendChild(b2); wrap.appendChild(b3); wrap.appendChild(tip);
-
-    const anchor = document.getElementById('tapPanel') || document.getElementById('timeline');
-    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(wrap, anchor);
-    else {
-      wrap.style.position = 'fixed'; wrap.style.bottom = '12px'; wrap.style.left = '12px'; wrap.style.zIndex = '99999';
-      document.body.appendChild(wrap);
-    }
+  function addHelpBar() {
+    if (document.getElementById('jzCutDragBar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'jzCutDragBar';
+    bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px;margin:6px 0;background:#1a1a22;border:1px solid #333;border-radius:8px;font-size:12px;color:#ddd';
+    bar.innerHTML = `
+      <span style="font-weight:700;color:#fbbf24">◆ Điểm chuyển cảnh cut</span>
+      <span style="opacity:.85">Kéo vạch <b style="color:#fbbf24">vàng</b> giữa các khối trên timeline = chỉnh cutTime (từng từ/đoạn). Marker dòng (tam giác trên) vẫn như cũ.</span>
+      <button type="button" id="jzSplitWords" style="padding:6px 12px;border-radius:6px;border:none;background:#f59e0b;color:#111;font-weight:700;cursor:pointer">Tách dòng đang phát → nhiều cut</button>
+    `;
+    const anchor = document.getElementById('timeline');
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(bar, anchor);
+    else document.body.appendChild(bar);
+    bar.querySelector('#jzSplitWords').onclick = splitCurrentLineToWords;
   }
 
   function boot() {
     hookDraw();
     hookPointer();
-    addBar();
-    // re-hook vài lần vì UI load muộn
-    setTimeout(() => { hookDraw(); hookPointer(); addBar(); }, 800);
+    addHelpBar();
+    setTimeout(() => { hookDraw(); hookPointer(); addHelpBar(); }, 600);
     setTimeout(() => { hookDraw(); hookPointer(); }, 2000);
     setTimeout(() => { hookDraw(); hookPointer(); }, 4000);
   }
-
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
-
-  console.log('[WORD-TL] Ready: green word markers on timeline, drag like line cuts');
 })();
 </script>
 

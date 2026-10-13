@@ -38517,27 +38517,64 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
     };
   }
 
-  // Thêm nút "Căn từ" vào mỗi dòng trong danh sách lời (khi list được build)
+  // Thêm nút "Căn từ" vào mỗi dòng + luôn có nút nổi
   function injectLineWordButtons() {
     const S = window.S;
-    if (!S || !S.lineEls) return;
-    S.lineEls.forEach((li, i) => {
-      if (!li || li.querySelector('.jz-word-btn')) return;
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'jz-word-btn ghost icon';
-      btn.textContent = '🔤';
-      btn.title = 'Căn từ thủ công cho dòng này';
-      btn.style.cssText = 'margin-left:4px;padding:2px 6px;cursor:pointer;font-size:12px;opacity:.85';
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        buildWordEditorPanel();
-        openWordEditor(i);
-      };
-      // chèn gần meta / cuts
-      const meta = li.querySelector('.meta') || li;
-      meta.appendChild(btn);
-    });
+    // 1) Nút trên từng dòng nếu list đã có
+    const tryInject = (lis) => {
+      if (!lis || !lis.length) return 0;
+      let n = 0;
+      lis.forEach((li, i) => {
+        if (!li || li.querySelector('.jz-word-btn')) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'jz-word-btn';
+        btn.textContent = '🔤';
+        btn.title = 'Căn từ thủ công — dòng ' + (i+1);
+        btn.style.cssText = 'margin-left:4px;padding:2px 7px;cursor:pointer;font-size:12px;border-radius:4px;border:1px solid #4ade80;background:#14532d;color:#bbf7d0;';
+        btn.onclick = (e) => {
+          e.preventDefault(); e.stopPropagation();
+          buildWordEditorPanel();
+          openWordEditor(i);
+        };
+        const meta = li.querySelector('.meta') || li.querySelector('.txt') || li;
+        meta.appendChild(btn);
+        n++;
+      });
+      return n;
+    };
+    if (S && S.lineEls) tryInject(S.lineEls);
+    // fallback: quét DOM list lời
+    const items = document.querySelectorAll('.col-left li, .line-list li, [class*="line"] li, .lyrics-list li');
+    if (items.length) tryInject(Array.from(items));
+  }
+
+  // Nút nổi LUÔN hiện: mở panel chọn dòng để căn từ thủ công
+  function ensureFloatingManualBtn() {
+    if (document.getElementById('jzManualWordFab')) return;
+    const fab = document.createElement('button');
+    fab.id = 'jzManualWordFab';
+    fab.type = 'button';
+    fab.innerHTML = '🔤 Căn từ thủ công';
+    fab.title = 'Mở panel chỉnh thời gian từng từ trong một dòng';
+    fab.style.cssText = 'position:fixed;bottom:90px;right:16px;z-index:99999;padding:10px 14px;border-radius:10px;border:none;cursor:pointer;font-size:14px;font-weight:700;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.4)';
+    fab.onclick = () => {
+      buildWordEditorPanel();
+      const panel = document.getElementById('jzWordEditor');
+      if (!panel) return;
+      // hiện picker chọn dòng nếu chưa chọn
+      const S = window.S;
+      let maxLine = 0;
+      if (S && S.plan && S.plan.lines) maxLine = S.plan.lines.length;
+      else if (S && S.project && S.project.lyrics) maxLine = S.project.lyrics.split(/\n/).filter(x=>x.trim()).length;
+      if (maxLine < 1) maxLine = 20;
+      const pick = prompt('Nhập số dòng cần căn từ thủ công (1–' + maxLine + '):', String((currentLineIdx>=0?currentLineIdx:0)+1));
+      if (pick == null) return;
+      const idx = Math.max(0, Math.min(maxLine-1, (parseInt(pick,10)||1) - 1));
+      openWordEditor(idx);
+      panel.style.display = 'block';
+    };
+    document.body.appendChild(fab);
   }
 
   // Hook replan / render list
@@ -38629,13 +38666,16 @@ J.uiApi = { toast, replan, syncUI, pause, seek, flushSave, loadAudioFile, restar
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { setTimeout(addButtons, 500); setTimeout(buildWordEditorPanel, 600); });
+    document.addEventListener('DOMContentLoaded', () => { setTimeout(addButtons, 500); setTimeout(buildWordEditorPanel, 600); setTimeout(ensureFloatingManualBtn, 700); });
   } else {
     setTimeout(addButtons, 500);
-    setTimeout(buildWordEditorPanel, 600);
+    setTimeout(buildWordEditorPanel, 600); setTimeout(ensureFloatingManualBtn, 700);
   }
   setTimeout(addButtons, 2000);
   setTimeout(injectLineWordButtons, 2500);
+  setTimeout(ensureFloatingManualBtn, 800);
+  setTimeout(ensureFloatingManualBtn, 2000);
+  setTimeout(ensureFloatingManualBtn, 4000);
 
   console.log('[WORD-TIMING] Ready: auto line/word + manual word editor per line (🔤 on each line)');
 })();

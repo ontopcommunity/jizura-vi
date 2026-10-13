@@ -38231,5 +38231,150 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
 })();
 </script>
 
+
+<script>
+/* ================================================================
+   1) Luôn nhúng âm thanh vào MP4
+   2) Sau xuất: upload Catbox.moe → hiện link xem (không chỉ tải về)
+   ================================================================ */
+(() => {
+  const CATBOX = 'https://catbox.moe/user/api.php';
+  const LITTER = 'https://litterbox.catbox.moe/resources/internals/api.php';
+
+  function forceAudio() {
+    try {
+      if (J && J.ui && J.ui.project) J.ui.project.includeAudio = true;
+      const el = document.getElementById('outAudio');
+      if (el) { el.checked = true; el.disabled = true; el.title = 'Luôn nhúng âm thanh vào video'; }
+    } catch (e) {}
+  }
+
+  async function uploadCatbox(blob, filename) {
+    const fd = new FormData();
+    fd.append('reqtype', 'fileupload');
+    fd.append('fileToUpload', blob, filename || 'video.mp4');
+    // thử catbox permanent
+    try {
+      const r = await fetch(CATBOX, { method: 'POST', body: fd, mode: 'cors' });
+      const t = (await r.text()).trim();
+      if (r.ok && /^https?:\/\//i.test(t)) return { url: t, host: 'catbox' };
+      console.warn('catbox response', r.status, t);
+    } catch (e) {
+      console.warn('catbox fail', e);
+    }
+    // fallback litterbox 72h (file lớn hơn, API tương tự)
+    try {
+      const fd2 = new FormData();
+      fd2.append('reqtype', 'fileupload');
+      fd2.append('time', '72h');
+      fd2.append('fileToUpload', blob, filename || 'video.mp4');
+      const r2 = await fetch(LITTER, { method: 'POST', body: fd2, mode: 'cors' });
+      const t2 = (await r2.text()).trim();
+      if (r2.ok && /^https?:\/\//i.test(t2)) return { url: t2, host: 'litterbox-72h' };
+      console.warn('litterbox response', r2.status, t2);
+    } catch (e2) {
+      console.warn('litterbox fail', e2);
+    }
+    throw new Error('Upload thất bại (CORS hoặc mạng). Video vẫn có thể tải về.');
+  }
+
+  function showLink(url, host, name, sizeMB) {
+    let box = document.getElementById('jzCatboxBox');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'jzCatboxBox';
+      box.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;padding:16px';
+      document.body.appendChild(box);
+    }
+    box.innerHTML = '';
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#16161c;border:1px solid #f59e0b;border-radius:14px;padding:18px 20px;max-width:440px;width:100%;color:#eee;font-family:system-ui,sans-serif';
+    card.innerHTML = '<div style="font-weight:800;color:#fbbf24;font-size:16px;margin-bottom:8px">Video đã lên Catbox</div>'
+      + '<div style="font-size:12px;opacity:.75;margin-bottom:10px">' + (name || 'video.mp4') + (sizeMB ? ' · ' + sizeMB + ' MB' : '') + (host ? ' · ' + host : '') + '</div>'
+      + '<input id="jzCbUrl" type="text" readonly style="width:100%;padding:10px;border-radius:8px;border:1px solid #444;background:#0d0d12;color:#7dd3fc;font-size:13px;box-sizing:border-box" />'
+      + '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">'
+      + '<a id="jzCbOpen" target="_blank" rel="noopener" style="flex:1;text-align:center;padding:10px;border-radius:8px;background:#f59e0b;color:#111;font-weight:700;text-decoration:none">Xem video</a>'
+      + '<button type="button" id="jzCbCopy" style="padding:10px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Copy link</button>'
+      + '<button type="button" id="jzCbDl" style="padding:10px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Tải về</button>'
+      + '<button type="button" id="jzCbClose" style="padding:10px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Đóng</button>'
+      + '</div>';
+    box.appendChild(card);
+    const inp = card.querySelector('#jzCbUrl');
+    inp.value = url;
+    card.querySelector('#jzCbOpen').href = url;
+    card.querySelector('#jzCbCopy').onclick = async () => {
+      try { await navigator.clipboard.writeText(url); card.querySelector('#jzCbCopy').textContent = 'Đã copy'; }
+      catch (e) { inp.select(); document.execCommand('copy'); }
+    };
+    card.querySelector('#jzCbClose').onclick = () => { box.remove(); };
+    let dlBlob = box._blob;
+    card.querySelector('#jzCbDl').onclick = () => {
+      if (!box._blob) return;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(box._blob);
+      a.download = name || 'video.mp4';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+    };
+    box._blob = null; // set by caller after
+    box.style.display = 'flex';
+    return box;
+  }
+
+  function hookSaveFile() {
+    if (typeof J === 'undefined' || !J.saveFile || J.saveFile.__catbox) return false;
+    const orig = J.saveFile;
+    J.saveFile = async function (filename, data) {
+      const isMp4 = /\.mp4$/i.test(filename || '') || (data && data.type === 'video/mp4');
+      const blob = data instanceof Blob ? data : new Blob([data], { type: isMp4 ? 'video/mp4' : undefined });
+
+      if (isMp4 && blob.size > 0) {
+        // luôn ưu tiên upload catbox
+        const box = showLink('Đang upload lên Catbox…', '', filename, (blob.size / 1048576).toFixed(1));
+        box._blob = blob;
+        const inp = document.getElementById('jzCbUrl');
+        try {
+          const res = await uploadCatbox(blob, filename);
+          if (inp) inp.value = res.url;
+          const open = document.getElementById('jzCbOpen');
+          if (open) open.href = res.url;
+          const hostEl = box.querySelector('div[style*="opacity"]');
+          // refresh card title area simply
+          showLink(res.url, res.host, filename, (blob.size / 1048576).toFixed(1));
+          const b2 = document.getElementById('jzCatboxBox');
+          if (b2) b2._blob = blob;
+          return 'saved';
+        } catch (e) {
+          console.error(e);
+          if (inp) inp.value = 'Upload lỗi — dùng Tải về. ' + (e.message || e);
+          // fallback download
+          try { await orig.call(J, filename, blob); } catch (e2) {}
+          return 'saved';
+        }
+      }
+      return orig.call(J, filename, data);
+    };
+    J.saveFile.__catbox = true;
+    return true;
+  }
+
+  // chặn tách WAV riêng khi đã có audio trong video (AAC); vẫn cho fallback nếu không encode được
+  function hookNoWavSidecar() {
+    // soft: force includeAudio
+    forceAudio();
+  }
+
+  function boot() {
+    forceAudio();
+    hookSaveFile();
+    setTimeout(forceAudio, 1000);
+    setTimeout(hookSaveFile, 1000);
+    setTimeout(forceAudio, 3000);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(boot, 500));
+  else setTimeout(boot, 500);
+})();
+</script>
+
 </body>
 </html>

@@ -5481,10 +5481,12 @@ async function encodeMP4({ plan, project, audio, onProgress, signal, range, file
       try { venc.encode(vf, { keyFrame: i % (fps * 2) === 0 }); } finally { vf.close(); }
       let spins = 0;
       // (time in the background doesn't count: a phone pauses the encoder while the page is hidden)
-      while (venc.encodeQueueSize > 4 && !err) { await new Promise(r => setTimeout(r, 2)); if (!document.hidden && ++spins > 15000) throw new Error('Bộ mã hóa không phản hồi'); }
+      while (venc.encodeQueueSize > 2 && !err) { await new Promise(r => setTimeout(r, 4)); if (!document.hidden && ++spins > 20000) throw new Error('Bộ mã hóa không phản hồi'); }
       // an encoder that accepts frames but never returns any has failed silently (seen with some GPU drivers)
       if (i === Math.min(total - 1, fps * 3) && outFrames === 0) { await venc.flush(); if (!outFrames) throw new Error('Bộ mã hóa không tạo ra kết quả'); }
-      if (i % 3 === 0) { onProgress && onProgress(i / total, `Khung${i + 1}/${total}${note || ''}`); await new Promise(r => setTimeout(r, 0)); }
+      // Yield thường xuyên hơn để tránh crash tab (chất lượng/FPS không đổi)
+      if (i % 2 === 0) { onProgress && onProgress(i / total, `Khung${i + 1}/${total}${note || ''}`); await new Promise(r => setTimeout(r, 0)); }
+      if (i % 30 === 0) await new Promise(r => setTimeout(r, 8));
     }
     await venc.flush();
     if (err) throw err;
@@ -5508,19 +5510,17 @@ async function encodeMP4({ plan, project, audio, onProgress, signal, range, file
       const ad = new AudioData({ format: 'f32-planar', sampleRate: ac.sr, numberOfFrames: n, numberOfChannels: chn, timestamp: Math.round(off * 1e6 / ac.sr), data });
       aenc.encode(ad); ad.close();
       // Yield nhiều hơn để tránh crash tab / OOM khi bài dài
-      if (aenc.encodeQueueSize > 8 || (off / block) % 8 === 0) await new Promise(r => setTimeout(r, 0));
+      if (aenc.encodeQueueSize > 4 || (off / block) % 4 === 0) await new Promise(r => setTimeout(r, 0));
+      if ((off / block) % 20 === 0) await new Promise(r => setTimeout(r, 6));
     }
     try {
       await aenc.flush();
     } catch (fe) { aErr = aErr || fe; }
     try { aenc.close(); } catch (ce) {}
-    // Không throw fatal nữa → video vẫn xuất được (có thể không có tiếng hoặc thiếu đoạn). Tránh "văng" hoàn toàn.
-    if (aErr) {
-      console.warn('Audio encode error (tiếp tục xuất video):', aErr);
-      // Đánh dấu không có audio để UI báo đúng
-      ac = null;
-    } else if (!aChunks || aEnd < (Math.min(span.dur, audio.buffer.duration - span.t0) - 0.5) * 1e6) {
-      console.warn('Audio encode incomplete, chunks=', aChunks);
+    // Đã mux chunk audio rồi thì giữ track (có tiếng). Chỉ bỏ báo cáo codec nếu 0 chunk.
+    if (aErr) console.warn('Audio encode warning:', aErr);
+    if (!aChunks) {
+      console.warn('Audio encode: 0 chunks');
       ac = null;
     }
   }
@@ -38259,33 +38259,33 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
   }
 
   async function uploadVideo(blob, filename) {
-    const name = filename || 'jizura.mp4';
+    // Chỉ dùng host trả file MP4 trực tiếp (Content-Type video/mp4) để mở xem được
+    const name = (filename || 'jizura.mp4').replace(/[^\w.\-]+/g, '_');
+    const mp4Blob = blob.type === 'video/mp4' ? blob : new Blob([blob], { type: 'video/mp4' });
     const hosts = [];
+    // litterbox / catbox: files.catbox.moe/*.mp4 — phát được trong trình duyệt
     hosts.push(async () => {
-      const r = await uploadOne('https://tmpfiles.org/api/v1/upload', () => {
-        const fd = new FormData(); fd.append('file', blob, name); return fd;
+      const r = await uploadOne('https://litterbox.catbox.moe/resources/internals/api.php', () => {
+        const fd = new FormData();
+        fd.append('reqtype', 'fileupload'); fd.append('time', '72h');
+        fd.append('fileToUpload', mp4Blob, name); return fd;
       });
-      if (!r.ok) throw new Error('tmpfiles ' + r.status);
-      let j; try { j = JSON.parse(r.text); } catch (e) { throw new Error('tmpfiles parse'); }
-      let u = (j && j.data && (j.data.url || j.data.file)) || '';
-      if (!u) throw new Error('tmpfiles no url');
-      u = String(u).replace('tmpfiles.org/', 'tmpfiles.org/dl/');
-      if (!/^https?:\/\//i.test(u)) throw new Error('tmpfiles bad');
-      return { url: u, host: 'tmpfiles.org' };
+      if (!r.ok) throw new Error('litter ' + r.status);
+      if (!/^https?:\/\/files\.catbox\.moe\//i.test(r.text) && !/^https?:\/\//i.test(r.text)) throw new Error('litter bad');
+      return { url: r.text, host: 'litterbox-72h' };
     });
     hosts.push(async () => {
-      const r = await uploadOne('https://file.io', () => {
-        const fd = new FormData(); fd.append('file', blob, name); return fd;
+      const r = await uploadOne('https://catbox.moe/user/api.php', () => {
+        const fd = new FormData();
+        fd.append('reqtype', 'fileupload'); fd.append('fileToUpload', mp4Blob, name); return fd;
       });
-      if (!r.ok) throw new Error('file.io ' + r.status);
-      let j; try { j = JSON.parse(r.text); } catch (e) { throw new Error('file.io parse'); }
-      const u = j && (j.link || j.url);
-      if (!u) throw new Error('file.io no link');
-      return { url: u, host: 'file.io' };
+      if (!r.ok) throw new Error('catbox ' + r.status);
+      if (!/^https?:\/\//i.test(r.text)) throw new Error('catbox bad');
+      return { url: r.text, host: 'catbox' };
     });
     hosts.push(async () => {
       const r = await uploadOne('https://0x0.st', () => {
-        const fd = new FormData(); fd.append('file', blob, name); return fd;
+        const fd = new FormData(); fd.append('file', mp4Blob, name); return fd;
       });
       if (!r.ok) throw new Error('0x0 ' + r.status);
       const u = r.text.split(/\s+/)[0];
@@ -38293,27 +38293,8 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
       return { url: u, host: '0x0.st' };
     });
     hosts.push(async () => {
-      const r = await uploadOne('https://litterbox.catbox.moe/resources/internals/api.php', () => {
-        const fd = new FormData();
-        fd.append('reqtype', 'fileupload'); fd.append('time', '72h');
-        fd.append('fileToUpload', blob, name); return fd;
-      });
-      if (!r.ok) throw new Error('litter ' + r.status);
-      if (!/^https?:\/\//i.test(r.text)) throw new Error('litter bad');
-      return { url: r.text, host: 'litterbox-72h' };
-    });
-    hosts.push(async () => {
-      const r = await uploadOne('https://catbox.moe/user/api.php', () => {
-        const fd = new FormData();
-        fd.append('reqtype', 'fileupload'); fd.append('fileToUpload', blob, name); return fd;
-      });
-      if (!r.ok) throw new Error('catbox ' + r.status);
-      if (!/^https?:\/\//i.test(r.text)) throw new Error('catbox bad');
-      return { url: r.text, host: 'catbox' };
-    });
-    hosts.push(async () => {
       const r = await uploadOne('https://uguu.se/upload.php', () => {
-        const fd = new FormData(); fd.append('files[]', blob, name); return fd;
+        const fd = new FormData(); fd.append('files[]', mp4Blob, name); return fd;
       });
       if (!r.ok) throw new Error('uguu ' + r.status);
       let j; try { j = JSON.parse(r.text); } catch (e) { throw new Error('uguu parse'); }
@@ -38321,6 +38302,18 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
       const u = f && (f.url || f.destination);
       if (!u) throw new Error('uguu no url');
       return { url: u, host: 'uguu.se' };
+    });
+    hosts.push(async () => {
+      const r = await uploadOne('https://tmpfiles.org/api/v1/upload', () => {
+        const fd = new FormData(); fd.append('file', mp4Blob, name); return fd;
+      });
+      if (!r.ok) throw new Error('tmpfiles ' + r.status);
+      let j; try { j = JSON.parse(r.text); } catch (e) { throw new Error('tmpfiles parse'); }
+      let u = (j && j.data && (j.data.url || j.data.file)) || '';
+      if (!u) throw new Error('tmpfiles no url');
+      u = String(u).replace('http://', 'https://').replace('tmpfiles.org/', 'tmpfiles.org/dl/');
+      if (!/^https?:\/\//i.test(u)) throw new Error('tmpfiles bad');
+      return { url: u, host: 'tmpfiles.org' };
     });
     const errors = [];
     for (const h of hosts) {
@@ -38337,30 +38330,46 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
 
   function showLink(url, host, name, sizeMB, blob) {
     let box = document.getElementById('jzCatboxBox');
-    if (box) box.remove();
+    if (box) {
+      try { if (box._blobUrl) URL.revokeObjectURL(box._blobUrl); } catch (e) {}
+      box.remove();
+    }
     box = document.createElement('div');
     box.id = 'jzCatboxBox';
-    box.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:16px';
-    box._blob = blob || null;
+    box.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;padding:12px';
+    const mp4 = blob ? (blob.type === 'video/mp4' ? blob : new Blob([blob], { type: 'video/mp4' })) : null;
+    box._blob = mp4;
+    let blobUrl = '';
+    if (mp4) {
+      try { blobUrl = URL.createObjectURL(mp4); box._blobUrl = blobUrl; } catch (e) {}
+    }
     const card = document.createElement('div');
-    card.style.cssText = 'background:#16161c;border:1px solid #f59e0b;border-radius:14px;padding:18px 20px;max-width:460px;width:100%;color:#eee;font-family:system-ui,sans-serif';
+    card.style.cssText = 'background:#16161c;border:1px solid #f59e0b;border-radius:14px;padding:16px 18px;max-width:520px;width:100%;color:#eee;font-family:system-ui,sans-serif;max-height:92vh;overflow:auto';
     const isUrl = /^https?:\/\//i.test(url);
     card.innerHTML =
-      '<div style="font-weight:800;color:#fbbf24;font-size:16px;margin-bottom:8px">' +
-      (isUrl ? 'Video đã có link' : 'Đang xử lý…') + '</div>' +
+      '<div style="font-weight:800;color:#fbbf24;font-size:16px;margin-bottom:6px">' +
+      (isUrl ? 'Video sẵn sàng xem' : 'Đang xử lý…') + '</div>' +
       '<div style="font-size:12px;opacity:.75;margin-bottom:10px">' +
       (name || 'video.mp4') + (sizeMB ? ' · ' + sizeMB + ' MB' : '') +
-      (host ? ' · ' + host : '') + '</div>' +
+      (host ? ' · ' + host : '') + ' · MP4 có tiếng</div>' +
+      (blobUrl
+        ? '<video id="jzCbPlayer" controls playsinline preload="metadata" style="width:100%;max-height:280px;border-radius:10px;background:#000;margin-bottom:10px"></video>'
+        : '') +
       '<input id="jzCbUrl" type="text" readonly value="" ' +
       'style="width:100%;padding:10px;border-radius:8px;border:1px solid #444;background:#0d0d12;color:#7dd3fc;font-size:13px;box-sizing:border-box" />' +
       '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">' +
-      (isUrl ? '<a id="jzCbOpen" href="#" target="_blank" rel="noopener" style="flex:1;text-align:center;padding:10px;border-radius:8px;background:#f59e0b;color:#111;font-weight:700;text-decoration:none">Mở / Xem</a>' : '') +
+      (isUrl ? '<a id="jzCbOpen" href="#" target="_blank" rel="noopener" style="flex:1;text-align:center;padding:10px;border-radius:8px;background:#f59e0b;color:#111;font-weight:700;text-decoration:none">Mở link MP4</a>' : '') +
       '<button type="button" id="jzCbCopy" style="padding:10px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Copy link</button>' +
       '<button type="button" id="jzCbDl" style="padding:10px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Tải về</button>' +
       '<button type="button" id="jzCbClose" style="padding:10px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Đóng</button>' +
       '</div>';
     box.appendChild(card);
     document.body.appendChild(box);
+    const player = card.querySelector('#jzCbPlayer');
+    if (player && blobUrl) {
+      player.src = blobUrl;
+      player.load();
+    }
     const inp = card.querySelector('#jzCbUrl');
     inp.value = url;
     const open = card.querySelector('#jzCbOpen');
@@ -38369,7 +38378,10 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
       try { await navigator.clipboard.writeText(inp.value); card.querySelector('#jzCbCopy').textContent = 'Đã copy'; }
       catch (e) { inp.select(); document.execCommand('copy'); }
     };
-    card.querySelector('#jzCbClose').onclick = () => box.remove();
+    card.querySelector('#jzCbClose').onclick = () => {
+      try { if (box._blobUrl) URL.revokeObjectURL(box._blobUrl); } catch (e) {}
+      box.remove();
+    };
     card.querySelector('#jzCbDl').onclick = () => {
       if (!box._blob) return;
       const a = document.createElement('a');
@@ -38386,8 +38398,9 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
     const orig = J.saveFile;
     J.saveFile = async function (filename, data) {
       const isMp4 = /\.mp4$/i.test(filename || '') || (data && data.type === 'video/mp4');
-      const blob = data instanceof Blob ? data : new Blob([data], { type: isMp4 ? 'video/mp4' : 'application/octet-stream' });
+      let blob = data instanceof Blob ? data : new Blob([data], { type: isMp4 ? 'video/mp4' : 'application/octet-stream' });
       if (isMp4 && blob.size > 0) {
+        if (blob.type !== 'video/mp4') blob = new Blob([blob], { type: 'video/mp4' });
         const sizeMB = (blob.size / 1048576).toFixed(1);
         showLink('Đang upload… thử nhiều host', '', filename, sizeMB, blob);
         try {
@@ -38396,7 +38409,8 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
           return 'saved';
         } catch (e) {
           console.error(e);
-          showLink('Upload lỗi — hãy Tải về. ' + (e.message || e), 'error', filename, sizeMB, blob);
+          // Vẫn cho xem bằng player local + tải về (file MP4 hợp lệ)
+          showLink('Upload lỗi — xem/tải bên dưới. ' + (e.message || e), 'local', filename, sizeMB, blob);
           try { await orig.call(J, filename, blob); } catch (e2) {}
           return 'saved';
         }

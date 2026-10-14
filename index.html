@@ -5450,7 +5450,11 @@ async function encodeMP4({ plan, project, audio, onProgress, signal, range, file
   const span = J.exportSpan(plan, range);
   const fps = plan.fps;
   let ac = null;
-  if (audio && audio.buffer && project.includeAudio !== false) ac = await J.pickAudioCodec(48000, Math.min(2, audio.buffer.numberOfChannels));
+  if (audio && audio.buffer) {
+    ac = await J.pickAudioCodec(48000, Math.min(2, audio.buffer.numberOfChannels));
+    if (!ac) { try { ac = await J.pickAudioCodec(audio.buffer.sampleRate || 48000, Math.min(2, audio.buffer.numberOfChannels)); } catch (e) {} }
+    if (!ac) console.warn('Không chọn được audio codec — video có thể không có tiếng');
+  }
   const store = file ? null : new BlockStore();
   const target = file ? new Mp4Muxer.FileSystemWritableFileStreamTarget(file, { chunkSize: 8 * 1048576 })
     : new Mp4Muxer.StreamTarget({ onData: (data, pos) => store.write(data, pos), chunked: true, chunkSize: 8 * 1048576 });
@@ -37507,7 +37511,9 @@ async function runExport(kind) {
     if (lost.length) throw new Error(`Phông chữ đã tải lên (${[...new Set(lost)].join(', ')}) không có trong trình duyệt này nên việc xuất đã dừng. Hãy tải lại cùng tệp ở mục Phông chữ, hoặc chọn phông chữ khác`);
     if (kind === 'mp4' || kind === 'mp4file') {
       const plan = S.plan, range = exportRange(), span = J.exportSpan(plan, range);
-      const r = await J.exportMP4({ plan, project: proj, audio: S.project.includeAudio !== false ? S.audio : null, quality: S.project.quality || 'high', onProgress, signal: ac.signal, range, file });
+      proj.includeAudio = true;
+      if (!S.audio || !S.audio.buffer) throw new Error('Chưa có nhạc trong bộ nhớ — hãy upload/chọn lại file nhạc trước khi xuất');
+      const r = await J.exportMP4({ plan, project: proj, audio: S.audio, quality: S.project.quality || 'high', onProgress, signal: ac.signal, range, file });
       file = null;
       txt.textContent = `Hoàn thành:${r.blob ? (r.blob.size / 1048576).toFixed(1) + 'MB·' : ''}${r.codec}${r.audio ? ' + ' + r.audio.toUpperCase() : ''}·${((performance.now() - t0) / 1000).toFixed(0)}giây`;
       if (r.blob) {
@@ -38234,80 +38240,136 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
 
 <script>
 /* ================================================================
-   1) Luôn nhúng âm thanh vào MP4
-   2) Sau xuất: upload Catbox.moe → hiện link xem (không chỉ tải về)
+   AUDIO bắt buộc trong MP4 + Upload link (nhiều host chống CORS)
    ================================================================ */
 (() => {
-  const CATBOX = 'https://catbox.moe/user/api.php';
-  const LITTER = 'https://litterbox.catbox.moe/resources/internals/api.php';
-
   function forceAudio() {
     try {
-      if (J && J.ui && J.ui.project) J.ui.project.includeAudio = true;
+      if (typeof J !== 'undefined' && J.ui && J.ui.project) J.ui.project.includeAudio = true;
       const el = document.getElementById('outAudio');
-      if (el) { el.checked = true; el.disabled = true; el.title = 'Luôn nhúng âm thanh vào video'; }
+      if (el) { el.checked = true; el.disabled = true; el.title = 'Bắt buộc: âm thanh luôn trong video'; }
     } catch (e) {}
   }
 
-  async function uploadCatbox(blob, filename) {
-    const fd = new FormData();
-    fd.append('reqtype', 'fileupload');
-    fd.append('fileToUpload', blob, filename || 'video.mp4');
-    // thử catbox permanent
-    try {
-      const r = await fetch(CATBOX, { method: 'POST', body: fd, mode: 'cors' });
-      const t = (await r.text()).trim();
-      if (r.ok && /^https?:\/\//i.test(t)) return { url: t, host: 'catbox' };
-      console.warn('catbox response', r.status, t);
-    } catch (e) {
-      console.warn('catbox fail', e);
-    }
-    // fallback litterbox 72h (file lớn hơn, API tương tự)
-    try {
-      const fd2 = new FormData();
-      fd2.append('reqtype', 'fileupload');
-      fd2.append('time', '72h');
-      fd2.append('fileToUpload', blob, filename || 'video.mp4');
-      const r2 = await fetch(LITTER, { method: 'POST', body: fd2, mode: 'cors' });
-      const t2 = (await r2.text()).trim();
-      if (r2.ok && /^https?:\/\//i.test(t2)) return { url: t2, host: 'litterbox-72h' };
-      console.warn('litterbox response', r2.status, t2);
-    } catch (e2) {
-      console.warn('litterbox fail', e2);
-    }
-    throw new Error('Upload thất bại (CORS hoặc mạng). Video vẫn có thể tải về.');
+  async function uploadOne(url, buildFd) {
+    const fd = buildFd();
+    const r = await fetch(url, { method: 'POST', body: fd, mode: 'cors' });
+    const text = await r.text();
+    return { ok: r.ok, status: r.status, text: (text || '').trim() };
   }
 
-  function showLink(url, host, name, sizeMB) {
-    let box = document.getElementById('jzCatboxBox');
-    if (!box) {
-      box = document.createElement('div');
-      box.id = 'jzCatboxBox';
-      box.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;padding:16px';
-      document.body.appendChild(box);
+  async function uploadVideo(blob, filename) {
+    const name = filename || 'jizura.mp4';
+    const hosts = [];
+    hosts.push(async () => {
+      const r = await uploadOne('https://tmpfiles.org/api/v1/upload', () => {
+        const fd = new FormData(); fd.append('file', blob, name); return fd;
+      });
+      if (!r.ok) throw new Error('tmpfiles ' + r.status);
+      let j; try { j = JSON.parse(r.text); } catch (e) { throw new Error('tmpfiles parse'); }
+      let u = (j && j.data && (j.data.url || j.data.file)) || '';
+      if (!u) throw new Error('tmpfiles no url');
+      u = String(u).replace('tmpfiles.org/', 'tmpfiles.org/dl/');
+      if (!/^https?:\/\//i.test(u)) throw new Error('tmpfiles bad');
+      return { url: u, host: 'tmpfiles.org' };
+    });
+    hosts.push(async () => {
+      const r = await uploadOne('https://file.io', () => {
+        const fd = new FormData(); fd.append('file', blob, name); return fd;
+      });
+      if (!r.ok) throw new Error('file.io ' + r.status);
+      let j; try { j = JSON.parse(r.text); } catch (e) { throw new Error('file.io parse'); }
+      const u = j && (j.link || j.url);
+      if (!u) throw new Error('file.io no link');
+      return { url: u, host: 'file.io' };
+    });
+    hosts.push(async () => {
+      const r = await uploadOne('https://0x0.st', () => {
+        const fd = new FormData(); fd.append('file', blob, name); return fd;
+      });
+      if (!r.ok) throw new Error('0x0 ' + r.status);
+      const u = r.text.split(/\s+/)[0];
+      if (!/^https?:\/\//i.test(u)) throw new Error('0x0 bad');
+      return { url: u, host: '0x0.st' };
+    });
+    hosts.push(async () => {
+      const r = await uploadOne('https://litterbox.catbox.moe/resources/internals/api.php', () => {
+        const fd = new FormData();
+        fd.append('reqtype', 'fileupload'); fd.append('time', '72h');
+        fd.append('fileToUpload', blob, name); return fd;
+      });
+      if (!r.ok) throw new Error('litter ' + r.status);
+      if (!/^https?:\/\//i.test(r.text)) throw new Error('litter bad');
+      return { url: r.text, host: 'litterbox-72h' };
+    });
+    hosts.push(async () => {
+      const r = await uploadOne('https://catbox.moe/user/api.php', () => {
+        const fd = new FormData();
+        fd.append('reqtype', 'fileupload'); fd.append('fileToUpload', blob, name); return fd;
+      });
+      if (!r.ok) throw new Error('catbox ' + r.status);
+      if (!/^https?:\/\//i.test(r.text)) throw new Error('catbox bad');
+      return { url: r.text, host: 'catbox' };
+    });
+    hosts.push(async () => {
+      const r = await uploadOne('https://uguu.se/upload.php', () => {
+        const fd = new FormData(); fd.append('files[]', blob, name); return fd;
+      });
+      if (!r.ok) throw new Error('uguu ' + r.status);
+      let j; try { j = JSON.parse(r.text); } catch (e) { throw new Error('uguu parse'); }
+      const f = j && j.files && j.files[0];
+      const u = f && (f.url || f.destination);
+      if (!u) throw new Error('uguu no url');
+      return { url: u, host: 'uguu.se' };
+    });
+    const errors = [];
+    for (const h of hosts) {
+      try {
+        const res = await h();
+        if (res && res.url) return res;
+      } catch (e) {
+        errors.push(String(e && e.message ? e.message : e));
+        console.warn('upload host fail', e);
+      }
     }
-    box.innerHTML = '';
+    throw new Error('Mọi host upload lỗi: ' + errors.join(' | '));
+  }
+
+  function showLink(url, host, name, sizeMB, blob) {
+    let box = document.getElementById('jzCatboxBox');
+    if (box) box.remove();
+    box = document.createElement('div');
+    box.id = 'jzCatboxBox';
+    box.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:16px';
+    box._blob = blob || null;
     const card = document.createElement('div');
-    card.style.cssText = 'background:#16161c;border:1px solid #f59e0b;border-radius:14px;padding:18px 20px;max-width:440px;width:100%;color:#eee;font-family:system-ui,sans-serif';
-    card.innerHTML = '<div style="font-weight:800;color:#fbbf24;font-size:16px;margin-bottom:8px">Video đã lên Catbox</div>'
-      + '<div style="font-size:12px;opacity:.75;margin-bottom:10px">' + (name || 'video.mp4') + (sizeMB ? ' · ' + sizeMB + ' MB' : '') + (host ? ' · ' + host : '') + '</div>'
-      + '<input id="jzCbUrl" type="text" readonly style="width:100%;padding:10px;border-radius:8px;border:1px solid #444;background:#0d0d12;color:#7dd3fc;font-size:13px;box-sizing:border-box" />'
-      + '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">'
-      + '<a id="jzCbOpen" target="_blank" rel="noopener" style="flex:1;text-align:center;padding:10px;border-radius:8px;background:#f59e0b;color:#111;font-weight:700;text-decoration:none">Xem video</a>'
-      + '<button type="button" id="jzCbCopy" style="padding:10px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Copy link</button>'
-      + '<button type="button" id="jzCbDl" style="padding:10px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Tải về</button>'
-      + '<button type="button" id="jzCbClose" style="padding:10px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Đóng</button>'
-      + '</div>';
+    card.style.cssText = 'background:#16161c;border:1px solid #f59e0b;border-radius:14px;padding:18px 20px;max-width:460px;width:100%;color:#eee;font-family:system-ui,sans-serif';
+    const isUrl = /^https?:\/\//i.test(url);
+    card.innerHTML =
+      '<div style="font-weight:800;color:#fbbf24;font-size:16px;margin-bottom:8px">' +
+      (isUrl ? 'Video đã có link' : 'Đang xử lý…') + '</div>' +
+      '<div style="font-size:12px;opacity:.75;margin-bottom:10px">' +
+      (name || 'video.mp4') + (sizeMB ? ' · ' + sizeMB + ' MB' : '') +
+      (host ? ' · ' + host : '') + '</div>' +
+      '<input id="jzCbUrl" type="text" readonly value="" ' +
+      'style="width:100%;padding:10px;border-radius:8px;border:1px solid #444;background:#0d0d12;color:#7dd3fc;font-size:13px;box-sizing:border-box" />' +
+      '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">' +
+      (isUrl ? '<a id="jzCbOpen" href="#" target="_blank" rel="noopener" style="flex:1;text-align:center;padding:10px;border-radius:8px;background:#f59e0b;color:#111;font-weight:700;text-decoration:none">Mở / Xem</a>' : '') +
+      '<button type="button" id="jzCbCopy" style="padding:10px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Copy link</button>' +
+      '<button type="button" id="jzCbDl" style="padding:10px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Tải về</button>' +
+      '<button type="button" id="jzCbClose" style="padding:10px 14px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;cursor:pointer">Đóng</button>' +
+      '</div>';
     box.appendChild(card);
+    document.body.appendChild(box);
     const inp = card.querySelector('#jzCbUrl');
     inp.value = url;
-    card.querySelector('#jzCbOpen').href = url;
+    const open = card.querySelector('#jzCbOpen');
+    if (open) open.href = url;
     card.querySelector('#jzCbCopy').onclick = async () => {
-      try { await navigator.clipboard.writeText(url); card.querySelector('#jzCbCopy').textContent = 'Đã copy'; }
+      try { await navigator.clipboard.writeText(inp.value); card.querySelector('#jzCbCopy').textContent = 'Đã copy'; }
       catch (e) { inp.select(); document.execCommand('copy'); }
     };
-    card.querySelector('#jzCbClose').onclick = () => { box.remove(); };
-    let dlBlob = box._blob;
+    card.querySelector('#jzCbClose').onclick = () => box.remove();
     card.querySelector('#jzCbDl').onclick = () => {
       if (!box._blob) return;
       const a = document.createElement('a');
@@ -38316,63 +38378,62 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 30000);
     };
-    box._blob = null; // set by caller after
-    box.style.display = 'flex';
     return box;
   }
 
   function hookSaveFile() {
-    if (typeof J === 'undefined' || !J.saveFile || J.saveFile.__catbox) return false;
+    if (typeof J === 'undefined' || !J.saveFile || J.saveFile.__linkUpload) return false;
     const orig = J.saveFile;
     J.saveFile = async function (filename, data) {
       const isMp4 = /\.mp4$/i.test(filename || '') || (data && data.type === 'video/mp4');
-      const blob = data instanceof Blob ? data : new Blob([data], { type: isMp4 ? 'video/mp4' : undefined });
-
+      const blob = data instanceof Blob ? data : new Blob([data], { type: isMp4 ? 'video/mp4' : 'application/octet-stream' });
       if (isMp4 && blob.size > 0) {
-        // luôn ưu tiên upload catbox
-        const box = showLink('Đang upload lên Catbox…', '', filename, (blob.size / 1048576).toFixed(1));
-        box._blob = blob;
-        const inp = document.getElementById('jzCbUrl');
+        const sizeMB = (blob.size / 1048576).toFixed(1);
+        showLink('Đang upload… thử nhiều host', '', filename, sizeMB, blob);
         try {
-          const res = await uploadCatbox(blob, filename);
-          if (inp) inp.value = res.url;
-          const open = document.getElementById('jzCbOpen');
-          if (open) open.href = res.url;
-          const hostEl = box.querySelector('div[style*="opacity"]');
-          // refresh card title area simply
-          showLink(res.url, res.host, filename, (blob.size / 1048576).toFixed(1));
-          const b2 = document.getElementById('jzCatboxBox');
-          if (b2) b2._blob = blob;
+          const res = await uploadVideo(blob, filename);
+          showLink(res.url, res.host, filename, sizeMB, blob);
           return 'saved';
         } catch (e) {
           console.error(e);
-          if (inp) inp.value = 'Upload lỗi — dùng Tải về. ' + (e.message || e);
-          // fallback download
+          showLink('Upload lỗi — hãy Tải về. ' + (e.message || e), 'error', filename, sizeMB, blob);
           try { await orig.call(J, filename, blob); } catch (e2) {}
           return 'saved';
         }
       }
       return orig.call(J, filename, data);
     };
-    J.saveFile.__catbox = true;
+    J.saveFile.__linkUpload = true;
     return true;
   }
 
-  // chặn tách WAV riêng khi đã có audio trong video (AAC); vẫn cho fallback nếu không encode được
-  function hookNoWavSidecar() {
-    // soft: force includeAudio
-    forceAudio();
+  function hookExport() {
+    if (typeof J === 'undefined' || !J.exportMP4 || J.exportMP4.__audioForce) return false;
+    const orig = J.exportMP4;
+    J.exportMP4 = async function (o) {
+      const opts = Object.assign({}, o || {});
+      opts.project = Object.assign({}, opts.project || {}, { includeAudio: true });
+      if (!opts.audio || !opts.audio.buffer) {
+        try { if (J.ui && J.ui.audio && J.ui.audio.buffer) opts.audio = J.ui.audio; } catch (e) {}
+      }
+      if (!opts.audio || !opts.audio.buffer) {
+        throw new Error('Bắt buộc có âm thanh: hãy upload file nhạc trước khi xuất video');
+      }
+      return orig.call(J, opts);
+    };
+    J.exportMP4.__audioForce = true;
+    return true;
   }
 
   function boot() {
     forceAudio();
     hookSaveFile();
-    setTimeout(forceAudio, 1000);
-    setTimeout(hookSaveFile, 1000);
-    setTimeout(forceAudio, 3000);
+    hookExport();
+    setTimeout(() => { forceAudio(); hookSaveFile(); hookExport(); }, 800);
+    setTimeout(() => { forceAudio(); hookSaveFile(); hookExport(); }, 2500);
   }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(boot, 500));
-  else setTimeout(boot, 500);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(boot, 400));
+  else setTimeout(boot, 400);
 })();
 </script>
 

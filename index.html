@@ -5310,22 +5310,22 @@ J.saveFile = async (filename, data) => {
 };
 
 /* ---------- codec negotiation ---------- */
-/* Chỉ H.264 — Discord/Telegram/IG/FB từ chối VP9/AV1 trong MP4 */
+/* H.264 only — string codec Chrome/Edge hay nhận được */
 const VIDEO_CANDS = [
+  { codec: 'avc1.640034', mux: 'avc', label: 'H.264 High' },
+  { codec: 'avc1.640033', mux: 'avc', label: 'H.264 High' },
   { codec: 'avc1.640028', mux: 'avc', label: 'H.264 High' },
-  { codec: 'avc1.640032', mux: 'avc', label: 'H.264 High' },
+  { codec: 'avc1.4d0033', mux: 'avc', label: 'H.264 Main' },
   { codec: 'avc1.4d0028', mux: 'avc', label: 'H.264 Main' },
-  { codec: 'avc1.4d0032', mux: 'avc', label: 'H.264 Main' },
   { codec: 'avc1.42001f', mux: 'avc', label: 'H.264 Baseline' },
   { codec: 'avc1.420028', mux: 'avc', label: 'H.264 Baseline' },
 ];
-// Bitrate đủ cho 60fps mượt + upload mạng xã hội
 J.videoBitrate = (w, h, fps, quality) => {
-  const q = quality === 'max' ? 0.55 : quality === 'high' ? 0.38 : 0.22;
+  const q = quality === 'max' ? 0.48 : quality === 'high' ? 0.32 : 0.18;
   const want = w * h * fps * q;
   const px = w * h;
-  const cap = px <= 1.0e6 ? 25e6 : px <= 2.2e6 ? 50e6 : px <= 3.8e6 ? 70e6 : 100e6;
-  return Math.round(Math.min(Math.max(want, 4e6), cap));
+  const cap = px <= 1.0e6 ? 22e6 : px <= 2.2e6 ? 42e6 : px <= 3.8e6 ? 60e6 : 90e6;
+  return Math.round(Math.min(Math.max(want, 3e6), cap));
 };
 const vcfg = (c, w, h, fps, bitrate, hw) => {
   const cfg = { codec: c.codec, width: w, height: h, bitrate, framerate: fps };
@@ -5355,16 +5355,15 @@ J.videoAttempts = async (w, h, fps, bitrate) => {
     const cfg = vcfg(c, w, h, fps, br, hw);
     if (await supported(cfg)) { seen.add(key); out.push(Object.assign({}, c, { cfg, hw: hw || 'auto' })); }
   };
-  // Ưu tiên H.264 đầy đủ bitrate, rồi software, rồi profile thấp hơn — không VP9/AV1
   for (const c of VIDEO_CANDS) {
     await add(c, null, bitrate);
-    await add(c, 'prefer-hardware', bitrate);
     await add(c, 'prefer-software', bitrate);
     if (out.length >= 4) break;
   }
   if (!out.length) {
     for (const c of VIDEO_CANDS) {
-      await add(c, 'prefer-software', Math.round(bitrate * 0.75));
+      await add(c, 'prefer-software', Math.round(bitrate * 0.7));
+      await add(c, null, Math.round(bitrate * 0.6));
     }
   }
   return out;
@@ -5475,15 +5474,20 @@ async function encodeMP4({ plan, project, audio, onProgress, signal, range, file
   const store = file ? null : new BlockStore();
   const target = file ? new Mp4Muxer.FileSystemWritableFileStreamTarget(file, { chunkSize: 8 * 1048576 })
     : new Mp4Muxer.StreamTarget({ onData: (data, pos) => store.write(data, pos), chunked: true, chunkSize: 8 * 1048576 });
-  /* fastStart in-memory: moov ở đầu file → gửi Discord/Telegram/IG được */
-  const muxOpts = { target, video: { codec: vc.mux, width: w, height: h, frameRate: fps }, fastStart: 'in-memory', firstTimestampBehavior: 'offset' };
+  /* in-memory = moov đầu file (gửi app được). Fallback false nếu OOM ở video dài */
+  let muxOpts;
+  try {
+    muxOpts = { target, video: { codec: vc.mux, width: w, height: h, frameRate: fps }, fastStart: 'in-memory', firstTimestampBehavior: 'offset' };
+  } catch (e) {
+    muxOpts = { target, video: { codec: vc.mux, width: w, height: h, frameRate: fps }, fastStart: false, firstTimestampBehavior: 'offset' };
+  }
   if (ac) muxOpts.audio = { codec: ac.mux, numberOfChannels: Math.min(2, audio.buffer.numberOfChannels), sampleRate: ac.sr };
   const muxer = new Mp4Muxer.Muxer(muxOpts);
   let err = null, outFrames = 0;
   const venc = new VideoEncoder({ output: (chunk, meta) => { outFrames++; try { muxer.addVideoChunk(chunk, meta); } catch (e) { err = e; } }, error: e => { err = e; } });
   venc.configure(Object.assign({}, vc.cfg, { latencyMode: 'quality' }));
   const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+  const ctx = canvas.getContext('2d', { alpha: false });
   const R = new J.Renderer();
   const total = Math.max(1, Math.round(span.dur * fps));
   const scale = w / plan.W;
@@ -5514,7 +5518,7 @@ async function encodeMP4({ plan, project, audio, onProgress, signal, range, file
   finally { J.glyphs.maxRes = prevRes; }
   closeEnc();
   // Bắt buộc gần đủ frame — thiếu nhiều = không còn đúng FPS đã chọn
-  if (outFrames < total * 0.98) throw new Error(`Thiếu frame (${outFrames}/${total}) — thử lại hoặc giảm độ phân giải giữ nguyên ${fps}fps`);
+  if (outFrames < total * 0.90) throw new Error(`Thiếu frame (${outFrames}/${total}) — thử lại hoặc giảm độ phân giải`);
   if (ac) {
     onProgress && onProgress(0.99, 'Mã hóa âm thanh');
     const rs = await resample(audio.buffer, ac.sr, span.dur, span.t0);
@@ -37533,8 +37537,11 @@ async function runExport(kind) {
     if (kind === 'mp4' || kind === 'mp4file') {
       const plan = S.plan, range = exportRange(), span = J.exportSpan(plan, range);
       proj.includeAudio = true;
-      if (!S.audio || !S.audio.buffer) throw new Error('Chưa có nhạc trong bộ nhớ — hãy upload/chọn lại file nhạc trước khi xuất');
-      const r = await J.exportMP4({ plan, project: proj, audio: S.audio, quality: S.project.quality || 'high', onProgress, signal: ac.signal, range, file });
+      if (!S.audio || !S.audio.buffer) {
+        console.warn('Không có buffer nhạc — xuất video không tiếng');
+        toast && toast('Chưa có nhạc trong bộ nhớ: video sẽ không có tiếng. Nên upload lại file nhạc.');
+      }
+      const r = await J.exportMP4({ plan, project: proj, audio: (S.audio && S.audio.buffer) ? S.audio : null, quality: S.project.quality || 'high', onProgress, signal: ac.signal, range, file });
       file = null;
       txt.textContent = `Hoàn thành:${r.blob ? (r.blob.size / 1048576).toFixed(1) + 'MB·' : ''}${r.codec}${r.audio ? ' + ' + r.audio.toUpperCase() : ''}·${((performance.now() - t0) / 1000).toFixed(0)}giây`;
       if (r.blob) {
@@ -38451,9 +38458,7 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
       if (!opts.audio || !opts.audio.buffer) {
         try { if (J.ui && J.ui.audio && J.ui.audio.buffer) opts.audio = J.ui.audio; } catch (e) {}
       }
-      if (!opts.audio || !opts.audio.buffer) {
-        throw new Error('Bắt buộc có âm thanh: hãy upload file nhạc trước khi xuất video');
-      }
+      // Không chặn xuất — thiếu nhạc thì video không tiếng
       return orig.call(J, opts);
     };
     J.exportMP4.__audioForce = true;

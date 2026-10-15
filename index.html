@@ -37597,10 +37597,10 @@ async function runExport(kind) {
         offerShare(boxes, r.blob, name);
       } else txt.textContent += ` · đã lưu vào “${fileName}”`;
       if (r.tried && r.tried.length) txt.textContent += ' (phương pháp đầu tiên không thành công nên một bộ mã hóa khác đã được sử dụng)';
-      // Luôn giữ âm thanh trong file MP4 (AAC hoặc Opus). Không tách file WAV riêng nữa.
-      if (r.audioWanted && r.audio !== 'aac') {
-        txt.textContent += r.audio ? '. Âm thanh được mã hóa Opus (một số trình phát cũ có thể không hỗ trợ; khuyến nghị dùng Chrome/Edge)' : '. Trình duyệt này không hỗ trợ mã hóa âm thanh, video sẽ không có tiếng';
-      } else if (S.project.includeAudio !== false && !S.audio && S.project.audioName) txt.textContent += '. Không có bài hát nào được tải nên video không có âm thanh (tải lại qua “Chọn tệp”)';
+      // Kiểu repo gốc: ghép nhạc vào MP4 — không tải file âm thanh riêng
+      if (r.audio) txt.textContent += '. Nhạc đã ghép trong video (' + r.audio.toUpperCase() + ')';
+      else if (r.audioWanted) txt.textContent += '. Không ghép được nhạc — dùng Chrome/Edge';
+      else if (!S.audio) txt.textContent += '. Chưa upload nhạc — video sẽ không có tiếng';
     } else {
       const blob = await J.exportPNGZip({ plan: S.plan, project: proj, transparent: kind === 'pnga', layers: kind === 'pngl', onProgress, signal: ac.signal, range: exportRange() });
       txt.textContent = `Hoàn thành:${(blob.size / 1048576).toFixed(1)}MB`;

@@ -5310,15 +5310,20 @@ J.saveFile = async (filename, data) => {
 };
 
 /* ---------- codec negotiation ---------- */
-/* H.264 only — string codec Chrome/Edge hay nhận được */
+/* H.264 — đủ profile/level để Chrome/Edge/Safari nhận và bật nút xuất */
 const VIDEO_CANDS = [
-  { codec: 'avc1.640034', mux: 'avc', label: 'H.264 High' },
-  { codec: 'avc1.640033', mux: 'avc', label: 'H.264 High' },
-  { codec: 'avc1.640028', mux: 'avc', label: 'H.264 High' },
-  { codec: 'avc1.4d0033', mux: 'avc', label: 'H.264 Main' },
+  { codec: 'avc1.42001E', mux: 'avc', label: 'H.264 Baseline' },
+  { codec: 'avc1.42001F', mux: 'avc', label: 'H.264 Baseline' },
+  { codec: 'avc1.42E01E', mux: 'avc', label: 'H.264 Baseline' },
+  { codec: 'avc1.4D001E', mux: 'avc', label: 'H.264 Main' },
+  { codec: 'avc1.4D001F', mux: 'avc', label: 'H.264 Main' },
   { codec: 'avc1.4d0028', mux: 'avc', label: 'H.264 Main' },
-  { codec: 'avc1.42001f', mux: 'avc', label: 'H.264 Baseline' },
-  { codec: 'avc1.420028', mux: 'avc', label: 'H.264 Baseline' },
+  { codec: 'avc1.4d0033', mux: 'avc', label: 'H.264 Main' },
+  { codec: 'avc1.64001F', mux: 'avc', label: 'H.264 High' },
+  { codec: 'avc1.640028', mux: 'avc', label: 'H.264 High' },
+  { codec: 'avc1.64002A', mux: 'avc', label: 'H.264 High' },
+  { codec: 'avc1.640033', mux: 'avc', label: 'H.264 High' },
+  { codec: 'avc1.640034', mux: 'avc', label: 'H.264 High' },
 ];
 J.videoBitrate = (w, h, fps, quality) => {
   const q = quality === 'max' ? 0.48 : quality === 'high' ? 0.32 : 0.18;
@@ -37492,11 +37497,26 @@ function syncOut() {
 function codecNoteSoon() { (window.requestIdleCallback || (f => setTimeout(f, 400)))(() => codecNote(), { timeout: 1500 }); }
 async function codecNote() {
   const [w, h] = J.outputSize(S.project);
-  const vc = await J.pickVideoCodec(w, h, S.project.fps, 12e6);
-  $('codecNote').textContent = vc ? `Trình duyệt này xuất với ${vc.label} TRÊN (${w}×${h} / ${S.project.fps}fps). Giữ tab này mở trong khi xuất.` : 'Trình duyệt này không hỗ trợ mã hóa video (WebCodecs). Hãy dùng thử Chrome hoặc Edge mới nhất hoặc xuất dưới dạng một chuỗi PNG.';
-  $('btnMP4').disabled = !vc; $('eMP4').disabled = !vc;
-  ['btnMP4File', 'eMP4File'].forEach(id => { $(id).hidden = !vc || !canPickFile(); });
-  if (!vc) $('eMP4').title = 'Trình duyệt này không hỗ trợ xuất MP4 (khuyên dùng Chrome hoặc Edge)';
+  const fps = S.project.fps || 30;
+  let vc = null;
+  try { vc = await J.pickVideoCodec(w, h, fps, 12e6); } catch (e) {}
+  if (!vc) try { vc = await J.pickVideoCodec(w, h, fps, 8e6); } catch (e) {}
+  if (!vc) try { vc = await J.pickVideoCodec(w, h, fps, 4e6); } catch (e) {}
+  if (!vc) try { vc = await J.pickVideoCodec(Math.min(w, 1280), Math.min(h, 720), Math.min(fps, 30), 6e6); } catch (e) {}
+  const canWE = typeof VideoEncoder !== 'undefined';
+  const enable = !!(vc || canWE);
+  try {
+    $('codecNote').textContent = vc
+      ? `Trình duyệt này xuất với ${vc.label} (${w}×${h} / ${fps}fps). Giữ tab này mở trong khi xuất.`
+      : (canWE
+        ? `WebCodecs sẵn sàng (${w}×${h} / ${fps}fps). Bấm Xuất MP4 — hệ thống tự chọn codec.`
+        : 'Trình duyệt không hỗ trợ WebCodecs. Dùng Chrome hoặc Edge.');
+  } catch (e) {}
+  try { $('btnMP4').disabled = !enable; } catch (e) {}
+  try { $('eMP4').disabled = !enable; } catch (e) {}
+  ['btnMP4File', 'eMP4File'].forEach(id => { try { $(id).hidden = !enable || !canPickFile(); } catch (e) {} });
+  if (!enable) { try { $('eMP4').title = 'Trình duyệt không hỗ trợ xuất MP4'; } catch (e) {} }
+  else { try { $('eMP4').title = ''; $('btnMP4').title = ''; } catch (e) {} }
 }
 const EXP_BTNS = ['btnMP4', 'btnPNG', 'btnPNGA', 'btnPNGL', 'eMP4', 'btnMP4File', 'eMP4File', 'ePNG', 'ePNGA', 'ePNGL'];
 function baseName() {
@@ -38465,12 +38485,23 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
     return true;
   }
 
+  function forceEnableMP4() {
+    if (typeof VideoEncoder === 'undefined') return;
+    ['btnMP4', 'eMP4'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) { el.disabled = false; el.removeAttribute('disabled'); el.title = ''; }
+    });
+  }
+
   function boot() {
     forceAudio();
     hookSaveFile();
     hookExport();
-    setTimeout(() => { forceAudio(); hookSaveFile(); hookExport(); }, 800);
-    setTimeout(() => { forceAudio(); hookSaveFile(); hookExport(); }, 2500);
+    forceEnableMP4();
+    setTimeout(() => { forceAudio(); hookSaveFile(); hookExport(); forceEnableMP4(); }, 600);
+    setTimeout(() => { forceEnableMP4(); try { if (typeof codecNote === 'function') codecNote(); } catch (e) {} }, 1500);
+    setTimeout(forceEnableMP4, 3000);
+    setTimeout(forceEnableMP4, 6000);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(boot, 400));
   else setTimeout(boot, 400);

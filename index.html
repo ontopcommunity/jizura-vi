@@ -38333,11 +38333,23 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
   }
 
   async function uploadVideo(blob, filename) {
-    // Chỉ dùng host trả file MP4 trực tiếp (Content-Type video/mp4) để mở xem được
+    // Botkeep ưu tiên + host phụ
     const name = (filename || 'jizura.mp4').replace(/[^\w.\-]+/g, '_');
     const mp4Blob = blob.type === 'video/mp4' ? blob : new Blob([blob], { type: 'video/mp4' });
     const hosts = [];
-    // litterbox / catbox: files.catbox.moe/*.mp4 — phát được trong trình duyệt
+    hosts.push(async () => {
+      const fd = new FormData();
+      fd.append('file', mp4Blob, name);
+      const r = await fetch('https://swwt6y.bot-keep.xyz/upload', { method: 'POST', body: fd, mode: 'cors' });
+      const t = await r.text();
+      if (!r.ok) throw new Error('botkeep ' + r.status + ' ' + t.slice(0, 120));
+      let j; try { j = JSON.parse(t); } catch (e) { throw new Error('botkeep parse'); }
+      let u = j && j.url;
+      if (!u) throw new Error('botkeep no url');
+      if (u.startsWith('/')) u = 'https://swwt6y.bot-keep.xyz' + u;
+      if (!/^https?:\/\//i.test(u)) throw new Error('botkeep bad url');
+      return { url: u, host: 'botkeep' };
+    });
     hosts.push(async () => {
       const r = await uploadOne('https://litterbox.catbox.moe/resources/internals/api.php', () => {
         const fd = new FormData();

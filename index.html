@@ -38512,10 +38512,17 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
   }
 
   function forceEnableMP4() {
-    if (typeof VideoEncoder === 'undefined') return;
+    const can = typeof VideoEncoder !== 'undefined';
     ['btnMP4', 'eMP4'].forEach(id => {
       const el = document.getElementById(id);
-      if (el) { el.disabled = false; el.removeAttribute('disabled'); el.title = ''; }
+      if (!el) return;
+      if (can) {
+        el.disabled = false;
+        el.removeAttribute('disabled');
+        el.title = '';
+        el.style.opacity = '1';
+        el.style.pointerEvents = 'auto';
+      }
     });
   }
 
@@ -38524,10 +38531,17 @@ J.uiApi = { toast, replan, syncUI, pause, play, seek, flushSave, loadAudioFile, 
     hookSaveFile();
     hookExport();
     forceEnableMP4();
-    setTimeout(() => { forceAudio(); hookSaveFile(); hookExport(); forceEnableMP4(); }, 600);
-    setTimeout(() => { forceEnableMP4(); try { if (typeof codecNote === 'function') codecNote(); } catch (e) {} }, 1500);
-    setTimeout(forceEnableMP4, 3000);
-    setTimeout(forceEnableMP4, 6000);
+    [200, 500, 1000, 2000, 4000, 8000].forEach(t => setTimeout(() => {
+      forceAudio(); hookSaveFile(); hookExport(); forceEnableMP4();
+      try { if (typeof codecNote === 'function') codecNote(); } catch (e) {}
+    }, t));
+    try {
+      const obs = new MutationObserver(() => forceEnableMP4());
+      ['btnMP4', 'eMP4'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) obs.observe(el, { attributes: true, attributeFilter: ['disabled'] });
+      });
+    } catch (e) {}
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(boot, 400));
   else setTimeout(boot, 400);
